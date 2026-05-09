@@ -17,6 +17,12 @@ XVNC_LOGFILE=/var/log/xvnc.log
 start() {
     ebegin "Starting X11 server (Xvnc + pulseaudio)"
 
+    # /tmp lives on the persistent ext4 overlay, so a stale X server lock
+    # from a previous boot will block Xvnc with "Server is already active
+    # for display 0". Wipe both the .X0-lock file and the X11 unix socket
+    # so Xvnc starts clean every boot.
+    rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
+
     mkdir -p "$PA_RUNTIME"
     chmod 755 "$PA_RUNTIME"
 
