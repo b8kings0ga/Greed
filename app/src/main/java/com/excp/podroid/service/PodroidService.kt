@@ -43,9 +43,12 @@ class PodroidService : Service() {
     @Inject lateinit var settingsRepository: SettingsRepository
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private var launchJob: Job? = null
     private var notificationJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
+
+    private var notificationBuilder: NotificationCompat.Builder? = null
+    private var stopPendingIntent: PendingIntent? = null
+    private var openPendingIntent: PendingIntent? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -166,8 +169,7 @@ class PodroidService : Service() {
     }
 
     private fun launchPodroid() {
-        launchJob?.cancel()
-        launchJob = serviceScope.launch {
+        serviceScope.launch {
             startNotificationUpdates()
             withContext(Dispatchers.IO) {
                 try {
@@ -219,7 +221,16 @@ class PodroidService : Service() {
             .createNotificationChannel(channel)
     }
 
-    private fun buildNotification(status: String): Notification {
+    /**
+     * Lazily build (and cache) the NotificationCompat.Builder + its PendingIntents
+     * once per service lifetime. Boot streams ~5 state-change emits per second, so
+     * recreating the Builder + two PendingIntents on every emit is pure churn.
+     * After the first call, updateNotification() just mutates contentText on the
+     * cached builder.
+     */
+    private fun getOrCreateNotificationBuilder(): NotificationCompat.Builder {
+        notificationBuilder?.let { return it }
+
         val openIntent = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java),
@@ -230,15 +241,23 @@ class PodroidService : Service() {
             Intent(this, PodroidService::class.java).apply { action = ACTION_STOP },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        openPendingIntent = openIntent
+        stopPendingIntent = stopIntent
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Podroid")
-            .setContentText(status)
             .setSmallIcon(R.drawable.ic_vm_notification)
             .setContentIntent(openIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .addAction(R.drawable.ic_stop, "Stop", stopIntent)
+        notificationBuilder = builder
+        return builder
+    }
+
+    private fun buildNotification(status: String): Notification {
+        return getOrCreateNotificationBuilder()
+            .setContentText(status)
             .build()
     }
 

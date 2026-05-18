@@ -209,8 +209,6 @@ class PodroidQemu @Inject constructor(
         return sess
     }
 
-    fun start() = start(emptyList())
-
     /** All snapshotted settings the engine needs for a single VM launch. */
     data class LaunchConfig(
         val ramMb: Int = 512,
@@ -223,15 +221,7 @@ class PodroidQemu @Inject constructor(
         val kernelExtraCmdline: String = "",
     )
 
-    fun start(
-        portForwards: List<PortForwardRule>,
-        ramMb: Int = 512,
-        cpus: Int = 1,
-        sshEnabled: Boolean = false,
-        androidIp: String = "unknown",
-    ) = start(portForwards, LaunchConfig(ramMb = ramMb, cpus = cpus, sshEnabled = sshEnabled, androidIp = androidIp))
-
-    fun start(portForwards: List<PortForwardRule>, config: LaunchConfig) {
+    suspend fun start(portForwards: List<PortForwardRule>, config: LaunchConfig) {
         if (_state.value is VmState.Starting || _state.value is VmState.Running) {
             Log.w(TAG, "start() called while VM is ${_state.value}, ignoring")
             return
@@ -306,7 +296,7 @@ class PodroidQemu @Inject constructor(
                     socketsReady = true
                     break
                 }
-                Thread.sleep(200)
+                delay(200)
             }
             if (!socketsReady) {
                 Log.e(TAG, "Socket timeout — QEMU sockets not ready after ${SOCKET_READY_TIMEOUT_MS}ms")

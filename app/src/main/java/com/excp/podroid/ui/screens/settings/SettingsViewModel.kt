@@ -9,6 +9,7 @@ package com.excp.podroid.ui.screens.settings
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -203,8 +204,12 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun resetVm() {
-        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
-        activityManager.clearApplicationUserData()
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                activityManager.clearApplicationUserData()
+            }
+        }
     }
 
     /**
@@ -221,27 +226,31 @@ class SettingsViewModel @Inject constructor(
      */
     fun exportConsoleLogs() {
         viewModelScope.launch {
-            val logFile = withContext(Dispatchers.IO) {
-                val file = File(context.filesDir, "log.txt")
-                file.writeText(buildDiagnosticLog())
-                file
-            }
+            try {
+                val logFile = withContext(Dispatchers.IO) {
+                    val file = File(context.filesDir, "log.txt")
+                    file.writeText(buildDiagnosticLog())
+                    file
+                }
 
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                logFile,
-            )
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_SUBJECT, "Podroid Diagnostic Log")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                val uri = FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    logFile,
+                )
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    putExtra(Intent.EXTRA_SUBJECT, "Podroid Diagnostic Log")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(Intent.createChooser(intent, "Share diagnostic log").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+            } catch (e: Exception) {
+                Log.w(TAG, "Export failed", e)
             }
-            context.startActivity(Intent.createChooser(intent, "Share diagnostic log").apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            })
         }
     }
 
@@ -349,5 +358,9 @@ class SettingsViewModel @Inject constructor(
         } catch (e: Exception) {
             "(failed to capture logcat: ${e.message})\n"
         }
+    }
+
+    companion object {
+        private const val TAG = "SettingsViewModel"
     }
 }
