@@ -547,7 +547,12 @@ class PodroidQemu @Inject constructor(
             // refactor cost. Stick with one iothread, num-queues==vCPUs.
             args += "-object"; args += "iothread,id=iothread0"
             args += "-device"; args += "virtio-blk-pci,drive=drive1,num-queues=${config.cpus},iothread=iothread0"
-            args += "-drive";  args += "file=${storagePath.absolutePath},if=none,id=drive1,format=raw,cache=writeback,aio=threads"
+            // discard=unmap + detect-zeroes=unmap: as the guest fstrim's the
+            // overlay, hand the punched holes back to the host filesystem so
+            // storage.img stops growing unbounded after long-term container
+            // churn. detect-zeroes converts all-zero writes (e.g. mkfs.ext4's
+            // erasure pass) into discards too.
+            args += "-drive";  args += "file=${storagePath.absolutePath},if=none,id=drive1,format=raw,cache=writeback,aio=threads,discard=unmap,detect-zeroes=unmap"
         }
 
         val rootfsImg = File(context.filesDir, "alpine-rootfs.squashfs")

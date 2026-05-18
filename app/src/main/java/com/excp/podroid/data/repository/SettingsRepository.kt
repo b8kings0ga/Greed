@@ -62,7 +62,7 @@ class SettingsRepository @Inject constructor(
          * paths without ballooning the QEMU process on phones with tight RAM.
          */
         const val DEFAULT_QEMU_EXTRA_ARGS =
-            "-cpu max,sve=off " +
+            "-cpu max,sve=off,pauth-impdef=on " +
             "-accel tcg,thread=multi,tb-size=512 " +
             "-object rng-random,id=rng0,filename=/dev/urandom " +
             "-device virtio-rng-pci,rng=rng0 " +
