@@ -159,6 +159,10 @@ fun TerminalScreen(
     val terminalFont by viewModel.terminalFont.collectAsStateWithLifecycle()
 
     if (showQuickSettings) {
+        // Bug 5: pass the screen's viewModel explicitly so QuickSettingsDialog uses
+        // the same instance rather than resolving a second entry-scoped one via
+        // the hiltViewModel() default, which would give it a different (orphaned)
+        // instance with stale/empty session state.
         QuickSettingsDialog(
             fontSize = fontSize,
             onFontSizeChange = { viewModel.setTerminalFontSize(it) },
@@ -171,6 +175,7 @@ fun TerminalScreen(
             onColorThemeChange = { viewModel.setTerminalColorTheme(it) },
             terminalFont = terminalFont,
             onFontChange = { viewModel.setTerminalFont(it) },
+            viewModel = viewModel,
         )
     }
 

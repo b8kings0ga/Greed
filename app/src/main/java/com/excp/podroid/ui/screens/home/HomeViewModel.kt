@@ -22,7 +22,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -86,15 +88,21 @@ class HomeViewModel @Inject constructor(
         HomeMeta(ramMb = 512, cpus = 2, storageGb = 8, sshEnabled = false, portForwardCount = 0, lastBootDurationMs = 0L),
     )
 
-    // Ticker — drives uptime display refresh every second while running. The
-    // formatted label is computed synchronously by uptimeLabel(); this flow
-    // exists only to recompose the consumer once per second.
-    val uptimeTicker: StateFlow<Long> = flow {
-        while (true) {
-            emit(System.currentTimeMillis() / 1000)
-            delay(1000)
+    // Ticker — drives uptime display refresh every second, but only while the VM
+    // is Running. Gated via flatMapLatest on vmState so no ticks (and no HomeScreen
+    // recompositions) happen while the VM is Idle/Starting/Stopped.
+    val uptimeTicker: StateFlow<Long> = engine.state
+        .map { it is VmState.Running }
+        .distinctUntilChanged()
+        .flatMapLatest { isRunning ->
+            if (isRunning) flow {
+                while (true) {
+                    emit(System.currentTimeMillis() / 1000)
+                    delay(1000)
+                }
+            } else flowOf(0L)
         }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
 
     /** Phone IPv4 — cheap, lazily recomputed when the screen reads it. */
     fun phoneIp(): String = NetworkUtils.localIpv4(context)
@@ -177,12 +185,17 @@ class HomeViewModel @Inject constructor(
     fun restartVm() {
         PodroidService.stop(context)
         viewModelScope.launch {
-            withTimeoutOrNull(10_000) {
+            // Only start if we observed a terminal state within the timeout window.
+            // A null result means QEMU is still tearing down — starting over it would
+            // race two instances on the same socket files and storage.img.
+            val reached = withTimeoutOrNull(10_000) {
                 engine.state.first { state ->
                     state is VmState.Stopped || state is VmState.Idle || state is VmState.Error
                 }
             }
-            PodroidService.start(context)
+            if (reached != null) {
+                PodroidService.start(context)
+            }
         }
     }
 }

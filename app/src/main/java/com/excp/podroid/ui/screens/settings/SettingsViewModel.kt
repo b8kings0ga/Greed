@@ -189,19 +189,23 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.setTerminalFont(value) }
     }
 
-    // "both" expands into separate TCP + UDP rules. Existing rules with the
-    // same host port + protocol are skipped so the persisted Set doesn't grow.
-    // Live add/remove is handled by EngineHolder's rule-diff loop — we just
-    // write to DataStore and the holder picks up the change.
-    fun addPortForward(hostPort: Int, guestPort: Int, protocol: String = "tcp") {
+    // "both" expands into separate TCP + UDP rules. Returns true if at least one
+    // rule was added; false if every expansion was already present (duplicate).
+    // Bug 8: the caller uses the return value to show feedback instead of silently
+    // closing the dialog on a duplicate.
+    fun addPortForward(hostPort: Int, guestPort: Int, protocol: String = "tcp"): Boolean {
         val protos = if (protocol == "both") listOf("tcp", "udp") else listOf(protocol)
+        val existing = portForwardRules.value.toSet()
+        val toAdd = protos.filter { proto ->
+            existing.none { it.hostPort == hostPort && it.protocol == proto }
+        }
+        if (toAdd.isEmpty()) return false
         viewModelScope.launch {
-            val existing = portForwardRules.value.toSet()
-            protos.forEach { proto ->
-                if (existing.any { it.hostPort == hostPort && it.protocol == proto }) return@forEach
+            toAdd.forEach { proto ->
                 portForwardRepository.addRule(PortForwardRule(hostPort, guestPort, proto))
             }
         }
+        return true
     }
 
     /** Current LAN IP of the Android device — shown next to port forward rules. Cached for the VM lifetime. */
@@ -354,11 +358,16 @@ class SettingsViewModel @Inject constructor(
             appendLine("verboseLogging = ${settingsRepository.getAvfVerboseLoggingSnapshot()}")
             appendLine()
 
+            appendLine("=== Engine Diagnostics ===")
+            val engineDiag = runCatching { engine.diagnosticsReport() }.getOrDefault("")
+            append(if (engineDiag.isBlank()) "(none)\n" else engineDiag)
+            appendLine()
+
             appendLine("=== App Logcat (this process) ===")
             append(captureAppLogcat())
             appendLine()
 
-            appendLine("=== QEMU Console Log ===")
+            appendLine("=== VM Console Log (backend=${activeBackendId()}) ===")
             val consoleFile = File(context.filesDir, "console.log")
             if (consoleFile.exists() && consoleFile.length() > 0) {
                 val text = consoleFile.readText()
@@ -374,19 +383,28 @@ class SettingsViewModel @Inject constructor(
     }
 
     /**
-     * Dump the current process's logcat buffer. Apps on Android 4.1+ can only
-     * read their own logs, so --pid filtering is redundant for security but
-     * keeps the output focused on Podroid tags.
+     * Dump this process's own logcat, filtered to Podroid's tags (+ `*:S` to
+     * silence everything else). Apps can only read their own logs, but that
+     * per-pid buffer is otherwise ~95% framework noise (ImeTracker, Surface,
+     * InsetsController, ...) that pushes the engine/vsock/boot lines out of the
+     * window before we can capture them; the allowlist keeps the signal.
      */
     private fun captureAppLogcat(): String {
         return try {
             val pid = android.os.Process.myPid().toString()
             val proc = Runtime.getRuntime().exec(
-                arrayOf("logcat", "-d", "-v", "time", "-t", "2000", "--pid=$pid")
+                (listOf("logcat", "-d", "-v", "time", "--pid=$pid") +
+                    APP_LOG_TAGS.map { "$it:V" } + "*:S").toTypedArray()
             )
             val output = proc.inputStream.bufferedReader().use { it.readText() }
             proc.waitFor()
-            if (output.isBlank()) "(logcat returned no lines)\n" else output
+            val lines = output.trimEnd().lines().filter { it.isNotBlank() }
+            when {
+                lines.isEmpty() -> "(no Podroid-tagged logcat lines)\n"
+                lines.size <= MAX_LOGCAT_LINES -> lines.joinToString("\n") + "\n"
+                else -> (listOf("... (${lines.size - MAX_LOGCAT_LINES} earlier lines trimmed) ...") +
+                    lines.takeLast(MAX_LOGCAT_LINES)).joinToString("\n") + "\n"
+            }
         } catch (e: Exception) {
             "(failed to capture logcat: ${e.message})\n"
         }
@@ -394,5 +412,17 @@ class SettingsViewModel @Inject constructor(
 
     companion object {
         private const val TAG = "SettingsViewModel"
+        private const val MAX_LOGCAT_LINES = 1500
+        /**
+         * Podroid's own logcat tags: the const TAGs plus the two literal-string
+         * tags (AvfReflect, PodroidVM-err for QEMU stderr). Keep in sync when a
+         * new component starts logging, or its lines won't reach the export.
+         */
+        private val APP_LOG_TAGS = listOf(
+            "AudioStreamer", "AvfEngine", "AvfReflect", "ConsoleFanout",
+            "EngineHolder", "PodroidApp", "PodroidService", "PodroidVM-err",
+            "QemuEngine", "QmpClient", "SettingsViewModel", "TerminalVM",
+            "VsockControlChannel", "VsockPortForwarder",
+        )
     }
 }

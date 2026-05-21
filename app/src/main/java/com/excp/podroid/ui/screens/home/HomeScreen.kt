@@ -29,6 +29,7 @@ import androidx.compose.material3.windowsizeclass.WindowHeightSizeClass
 import androidx.compose.material3.windowsizeclass.WindowSizeClass
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -68,7 +69,9 @@ fun HomeScreen(
     val isRunning  = vmState is VmState.Running
     val isStarting = vmState is VmState.Starting
     val uptimeLabel = viewModel.uptimeLabel(uptimeTick)
-    val phoneIp = viewModel.phoneIp()
+    // Bug 6: cache the result of the ConnectivityManager binder call so it doesn't
+    // re-run on every 1 Hz tick or incidental recomposition.
+    val phoneIp = remember { viewModel.phoneIp() }
 
     updateInfo?.let { info ->
         AlertDialog(
@@ -78,7 +81,11 @@ fun HomeScreen(
             text  = { Text("Version ${info.latestVersion} is available. You have ${BuildConfig.VERSION_NAME}.") },
             confirmButton = {
                 TextButton(onClick = {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info.releaseUrl)))
+                    // Bug 9: guard against ActivityNotFoundException (no browser) or a
+                    // blank/malformed releaseUrl from the remote JSON source.
+                    runCatching {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info.releaseUrl)))
+                    }
                     viewModel.dismissUpdate()
                 }) { Text("Download") }
             },

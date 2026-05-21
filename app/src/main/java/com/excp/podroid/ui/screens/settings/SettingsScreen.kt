@@ -54,7 +54,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
-import androidx.compose.runtime.collectAsState
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.excp.podroid.BuildConfig
 import com.excp.podroid.data.repository.PortForwardRule
@@ -272,7 +271,8 @@ fun SettingsScreen(
                     onClick = { viewModel.exportConsoleLogs() },
                 )
                 Spacer(Modifier.height(PodroidTokens.Spacing.SM))
-                val avfVerbose by viewModel.avfVerboseLogging.collectAsState()
+                // Bug 7: use lifecycle-aware collection to match the rest of the screen.
+                val avfVerbose by viewModel.avfVerboseLogging.collectAsStateWithLifecycle()
                 PodroidListRow(
                     label = "Verbose AVF logging",
                     rightSlot = {
@@ -311,8 +311,12 @@ fun SettingsScreen(
         AddPortForwardDialog(
             onDismiss = { showAddDialog = false },
             onAdd = { hostPort, guestPort, protocol ->
-                viewModel.addPortForward(hostPort, guestPort, protocol)
-                showAddDialog = false
+                // Bug 8: only close the dialog when the rule was actually added.
+                // addPortForward returns false if the (hostPort, protocol) pair
+                // already exists; in that case the dialog stays open with an error.
+                val added = viewModel.addPortForward(hostPort, guestPort, protocol)
+                if (added) showAddDialog = false
+                added
             },
         )
     }
@@ -606,7 +610,9 @@ private fun AdvancedFieldsBlock(
 @Composable
 private fun AddPortForwardDialog(
     onDismiss: () -> Unit,
-    onAdd: (hostPort: Int, guestPort: Int, protocol: String) -> Unit,
+    // Bug 8: returns true if the rule was added, false if it was a duplicate.
+    // The dialog shows an error and stays open on false.
+    onAdd: (hostPort: Int, guestPort: Int, protocol: String) -> Boolean,
 ) {
     var hostPort by remember { mutableStateOf("") }
     var guestPort by remember { mutableStateOf("") }
@@ -669,7 +675,8 @@ private fun AddPortForwardDialog(
                     error = "Enter valid port numbers (1–65535)"
                     return@TextButton
                 }
-                onAdd(hp, gp, protocol)
+                val added = onAdd(hp, gp, protocol)
+                if (!added) error = "Port $hp (${protocol.uppercase()}) is already forwarded"
             }) {
                 Text("Add")
             }

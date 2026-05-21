@@ -7,10 +7,13 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.Settings
-import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
 import androidx.compose.animation.core.animateDpAsState
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,12 +41,14 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.windowsizeclass.WindowHeightSizeClass
 import androidx.compose.material3.windowsizeclass.WindowSizeClass
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,29 +77,50 @@ fun SetupScreen(
     viewModel: SetupViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
-    var selectedGb by remember { mutableIntStateOf(DEFAULT_STORAGE_GB) }
-    var sshEnabled by remember { mutableStateOf(true) }
-    var storageAccessEnabled by remember { mutableStateOf(false) }
+    // rememberSaveable preserves wizard choices through config changes (rotation, font-scale, etc.)
+    // so a mid-wizard rotation doesn't silently reset storage to 8 GB (not resizable later).
+    var selectedGb by rememberSaveable { mutableIntStateOf(DEFAULT_STORAGE_GB) }
+    var sshEnabled by rememberSaveable { mutableStateOf(true) }
+    var storageAccessEnabled by rememberSaveable { mutableStateOf(false) }
     val setupComplete by viewModel.setupComplete.collectAsStateWithLifecycle()
     val pagerState = rememberPagerState(pageCount = { 3 })
     val scope = rememberCoroutineScope()
 
+    // Bug 4: request the notification permission BEFORE navigating away; using
+    // rememberLauncherForActivityResult registers it while the composable is still
+    // alive, so the result actually arrives. ActivityCompat.requestPermissions
+    // after onSetupComplete() fires against a transitioning Activity and is dropped
+    // on some OEMs.
+    val notifPermLauncher = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        rememberLauncherForActivityResult(RequestPermission()) { /* grant result: no-op */ }
+    } else null
+
     LaunchedEffect(setupComplete) {
         if (setupComplete) {
-            onSetupComplete()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                val activity = context as? ComponentActivity ?: return@LaunchedEffect
-                if (ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS)
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
                     != PackageManager.PERMISSION_GRANTED
                 ) {
-                    ActivityCompat.requestPermissions(
-                        activity,
-                        arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                        0,
-                    )
+                    notifPermLauncher?.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
             }
+            onSetupComplete()
         }
+    }
+
+    // Bug 10: re-sync storageAccessEnabled against the actual OS grant on every
+    // resume (the user may have denied the all-files-access screen we sent them to).
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME &&
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+            ) {
+                storageAccessEnabled = storageAccessEnabled && Environment.isExternalStorageManager()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     Scaffold { innerPadding ->
