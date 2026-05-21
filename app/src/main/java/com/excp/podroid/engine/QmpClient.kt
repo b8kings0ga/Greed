@@ -79,8 +79,11 @@ class QmpClient(private val socketPath: String) {
         private fun isHostfwdError(returnText: String): Boolean {
             val t = returnText.trim()
             if (t.isEmpty()) return false
-            return t.contains("could not set up", ignoreCase = true) ||
-                t.startsWith("Could not")
+            // Robustly case-insensitive: QEMU/SLIRP casing isn't guaranteed
+            // across versions, so a single ignoreCase contains() catches both
+            // "Could not set up host forwarding rule ..." and lowercase variants
+            // rather than mixing an anchored phrase with a case-sensitive prefix.
+            return t.contains("could not", ignoreCase = true)
         }
     }
 

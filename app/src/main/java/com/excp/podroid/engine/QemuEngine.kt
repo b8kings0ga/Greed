@@ -72,6 +72,16 @@ class QemuEngine @Inject constructor(
 
     override val backendId: String = "qemu"
 
+    /**
+     * Wall-clock millis at which this VM reached Running, or null when not
+     * running. Set on every →Running transition (BootStageDetector's onReady
+     * and the 60s boot-timeout fallback) and cleared in cleanup(); read by the
+     * UI uptime readout via the [VmEngine] override.
+     */
+    @Volatile
+    private var _runningSinceMs: Long? = null
+    override val runningSinceMs: Long? get() = _runningSinceMs
+
     @Volatile
     var process: Process? = null
         private set
@@ -120,6 +130,9 @@ class QemuEngine @Inject constructor(
     private val maxConsoleSize = 64 * 1024
 
     private val bootStageDetector = BootStageDetector(_bootStage, _state) {
+        // BootStageDetector has already flipped _state to Running by the time
+        // this onReady fires; stamp the uptime origin to match.
+        _runningSinceMs = System.currentTimeMillis()
         persistBootDuration()
         autoStartBridge()
     }
@@ -198,6 +211,9 @@ class QemuEngine @Inject constructor(
         android.os.Handler(android.os.Looper.getMainLooper()).post {
             if (_terminalSession != null) return@post
             if (_state.value !is VmState.Running && _state.value !is VmState.Starting) return@post
+            // A late onReady could land after cleanup() already deleted the
+            // sockets; don't arm a bridge against a torn-down VM lifetime.
+            if (cleanedUp.get()) return@post
 
             // Bridge connects to terminal.sock (virtio-console, separate from serial).
             // No handoff with the boot monitor needed — they use different sockets.
@@ -266,6 +282,12 @@ class QemuEngine @Inject constructor(
         }
 
         val qemuExe = qemuExecutable() ?: run {
+            // The startMutex block already set cleanedUp=false and bootStartTime;
+            // restore the "cleanedUp=false ⟺ a VM lifetime is in progress"
+            // invariant on this early-error return, matching the other error
+            // paths (which run cleanup()). No process/scope exists yet.
+            cleanedUp.set(true)
+            bootStartTime = 0L
             _state.value = VmState.Error("QEMU binary not found.")
             return
         }
@@ -375,6 +397,7 @@ class QemuEngine @Inject constructor(
                         Log.w(TAG, "Boot timeout fallback → forcing Running state")
                         _bootStage.value = "Ready"
                         persistBootDuration()
+                        _runningSinceMs = System.currentTimeMillis()
                         _state.value = VmState.Running
                         autoStartBridge()
                     }
@@ -432,6 +455,11 @@ class QemuEngine @Inject constructor(
         val sock = LocalSocket()
         try {
             sock.connect(LocalSocketAddress(serialSockPath, LocalSocketAddress.Namespace.FILESYSTEM))
+            // Read timeout so a wedged-but-alive VM (no serial output) can't
+            // block this monitor forever in input.read(); on timeout we loop and
+            // re-check proc.isAlive instead of treating it as EOF. Mirrors the
+            // soTimeout QmpClient already sets on its command socket.
+            sock.soTimeout = BOOT_SOCKET_READ_TIMEOUT_MS
             bootSocket = sock
             Log.d(TAG, "Boot monitor connected to serial.sock")
         } catch (e: Exception) {
@@ -460,6 +488,12 @@ class QemuEngine @Inject constructor(
                 while (true) {
                     val n = try {
                         input.read(readBuf)
+                    } catch (_: java.net.SocketTimeoutException) {
+                        // No serial output within the timeout. If QEMU is still
+                        // alive it may just be idle/wedged — loop and keep
+                        // waiting; only stop once the process is gone.
+                        if (!proc.isAlive) break
+                        continue
                     } catch (_: Exception) {
                         break // socket closed by releaseSerial() or VM exit
                     }
@@ -508,15 +542,23 @@ class QemuEngine @Inject constructor(
      */
     override fun stop() {
         val proc = process ?: return
+        // Issue the graceful SIGTERM immediately (non-blocking), then run the
+        // graceful-wait → forceful-escalation off the caller's thread. stop() is
+        // called from PodroidService on the main thread, so blocking up to ~5s
+        // in waitFor() here risks an ANR under TCG load. The dedicated
+        // qemuDispatcher thread already performs the final waitFor() reap in
+        // start(), which drives cleanup() and the →Stopped transition.
         proc.destroy()
-        try {
-            if (!proc.waitFor(3, TimeUnit.SECONDS)) {
+        Thread({
+            try {
+                if (!proc.waitFor(3, TimeUnit.SECONDS)) {
+                    proc.destroyForcibly()
+                    proc.waitFor(2, TimeUnit.SECONDS)
+                }
+            } catch (_: Exception) {
                 proc.destroyForcibly()
-                proc.waitFor(2, TimeUnit.SECONDS)
             }
-        } catch (_: Exception) {
-            proc.destroyForcibly()
-        }
+        }, "podroid-qemu-stop").apply { isDaemon = true }.start()
     }
 
     override suspend fun addPortForward(rule: PortForwardRule) {
@@ -549,6 +591,7 @@ class QemuEngine @Inject constructor(
         sessionClientDelegate = null
         consoleBuilder.clear()
         _consoleText.value = ""
+        _runningSinceMs = null
         File(serialSockPath).delete()
         File(terminalSockPath).delete()
         File(ctrlSockPath).delete()
@@ -766,5 +809,13 @@ class QemuEngine @Inject constructor(
 
         /** Shared deadline for both start()'s socket-readiness loop and monitorBootSerial's wait. */
         private const val SOCKET_READY_TIMEOUT_MS = 10_000L
+
+        /**
+         * Read timeout on the boot serial socket. On timeout the monitor loops
+         * and re-checks proc.isAlive instead of blocking forever on a
+         * wedged-but-alive VM. Does not affect the happy path: bytes arriving
+         * before the timeout are read normally.
+         */
+        private const val BOOT_SOCKET_READ_TIMEOUT_MS = 3000
     }
 }

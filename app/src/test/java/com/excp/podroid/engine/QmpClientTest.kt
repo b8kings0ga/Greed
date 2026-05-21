@@ -59,7 +59,20 @@ class QmpClientTest {
         val verdict = classifyQmpFields(
             hasError = false,
             hasEvent = false,
-            returnValue = "Could not set up host forwarding rule",
+            returnValue = "Could not set up host forwarding rule 'tcp::8080-:80'",
+        )
+        assertTrue(verdict is QmpVerdict.Failure)
+    }
+
+    @Test
+    fun `human-monitor return with lowercase could not is a failure`() {
+        // Casing is not guaranteed across QEMU/SLIRP versions; a lowercase
+        // "could not ..." that isn't the "set up" phrasing must still classify
+        // as a failure rather than silently reporting the forward as applied.
+        val verdict = classifyQmpFields(
+            hasError = false,
+            hasEvent = false,
+            returnValue = "could not find a free port for host forwarding rule",
         )
         assertTrue(verdict is QmpVerdict.Failure)
     }
