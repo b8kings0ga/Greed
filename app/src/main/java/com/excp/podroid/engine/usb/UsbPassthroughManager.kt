@@ -94,6 +94,13 @@ class UsbPassthroughManager @Inject constructor(
      */
     fun start() {
         if (started) return
+        if (engine.qmpClient == null) {
+            // No QMP channel means no way to hand an fd to the guest (e.g. the AVF
+            // backend). USB passthrough is QEMU-only, so don't arm the receiver or
+            // pop a permission dialog that would lead nowhere.
+            Log.i(TAG, "USB passthrough not armed: active backend has no QMP channel")
+            return
+        }
         started = true
         val filter = IntentFilter().apply {
             addAction(ACTION_USB_PERMISSION)
@@ -114,14 +121,17 @@ class UsbPassthroughManager @Inject constructor(
         if (!started) return
         started = false
         runCatching { context.unregisterReceiver(receiver) }
+        // Cancel in-flight attach/detach BEFORE snapshotting `active`. An attach
+        // parked on a QMP round-trip unwinds at its suspension point; combined with
+        // the `started` re-check in attach(), this stops a near-complete attach from
+        // resurrecting an entry after we clear the map (which would leak its fd and
+        // block re-passthrough of that device). Keep the scope itself alive: a later
+        // start() (VM stop, then restart within one process) must be able to launch
+        // again; scope.cancel() would leave a dead Job that silently no-ops.
+        scope.coroutineContext.cancelChildren()
         val entries = active.values.toList()
         active.clear()
         for (e in entries) runCatching { e.connection.close() }
-        // Cancel in-flight attach/detach work but keep the scope itself alive:
-        // a later start() (VM stop, then restart within one process) re-arms the
-        // receiver and must be able to launch again. scope.cancel() would leave
-        // a dead Job behind and silently no-op every future attach.
-        scope.coroutineContext.cancelChildren()
         Log.d(TAG, "USB passthrough disarmed — released ${entries.size} device(s)")
     }
 
@@ -183,6 +193,14 @@ class UsbPassthroughManager @Inject constructor(
                 qmp.deviceAdd(args).onFailure { e ->
                     Log.w(TAG, "device_add usb-host failed for ${device.deviceName}", e)
                     qmp.removeFd(fdSetId)
+                    connection.close()
+                    return
+                }
+                if (!started) {
+                    // stop() ran while this attach was finishing its QMP round-trip.
+                    // The VM is being torn down, so the guest side needs no device_del
+                    // (same rationale as stop()); just release the Android handle and
+                    // don't resurrect an entry stop() already cleared.
                     connection.close()
                     return
                 }
