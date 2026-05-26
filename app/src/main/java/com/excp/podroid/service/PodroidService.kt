@@ -48,6 +48,8 @@ class PodroidService : Service() {
     @Inject lateinit var portForwardRepository: PortForwardRepository
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var usbPassthroughManager: UsbPassthroughManager
+    @Inject lateinit var notificationPoster: com.excp.podroid.engine.hostbridge.AndroidNotificationPoster
+    private var hostRequestServer: com.excp.podroid.engine.hostbridge.HostRequestServer? = null
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var notificationJob: Job? = null
@@ -130,6 +132,7 @@ class PodroidService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         notificationJob?.cancel()
+        hostRequestServer?.stop()
         usbPassthroughManager.stop()
         releaseWakeLock()
         serviceScope.cancel()
@@ -263,6 +266,33 @@ class PodroidService : Service() {
         }
     }
 
+    private fun ensureHostBridge(): com.excp.podroid.engine.hostbridge.HostRequestServer {
+        hostRequestServer?.let { return it }
+        val dispatcher = com.excp.podroid.engine.hostbridge.HostRequestDispatcher(
+            notifications = notificationPoster,
+            addForward = { portForwardRepository.addRule(it) },
+            removeForward = { portForwardRepository.removeRule(it) },
+            listForwards = { portForwardRepository.getRulesSnapshot() },
+        )
+        return com.excp.podroid.engine.hostbridge.HostRequestServer(
+            openTransport = { engine.openHostTransport() },
+            dispatcher = dispatcher,
+            scope = serviceScope,
+        ).also { hostRequestServer = it }
+    }
+
+    /** Always-on: starts the guest host bridge on Running, stops it on terminal. */
+    private suspend fun observeStateForHostBridge() {
+        engine.state.collect { state ->
+            when (state) {
+                is VmState.Running -> ensureHostBridge().start()
+                is VmState.Stopped, is VmState.Idle, is VmState.Error ->
+                    hostRequestServer?.stop()
+                else -> {}
+            }
+        }
+    }
+
     private fun launchPodroid() {
         serviceScope.launch {
             startNotificationUpdates()
@@ -304,6 +334,7 @@ class PodroidService : Service() {
                         x11Dpi = settingsRepository.getX11DpiSnapshot(),
                         usbPassthroughEnabled = settingsRepository.getUsbPassthroughEnabledSnapshot(),
                     )
+                    serviceScope.launch { observeStateForHostBridge() }
                     if (config.usbPassthroughEnabled) {
                         serviceScope.launch { observeStateForUsb() }
                     }
