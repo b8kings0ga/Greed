@@ -49,6 +49,14 @@ class MainActivity : ComponentActivity() {
                     lp.screenBrightness = 0.004f
                     window.attributes = lp
                     window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    // The soft keyboard is a separate window above the overlay, so
+                    // it stays visible (and interactive) over a black server-mode
+                    // screen when entered from the terminal. Clear the focused
+                    // editor and dismiss the IME so the screen is truly black.
+                    window.currentFocus?.clearFocus()
+                    (getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+                        as? android.view.inputmethod.InputMethodManager)
+                        ?.hideSoftInputFromWindow(window.decorView.windowToken, 0)
                 } else {
                     lp.screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
                     window.attributes = lp
