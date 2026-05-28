@@ -389,10 +389,10 @@ class SettingsViewModel @Inject constructor(
             appendLine()
 
             val avf = com.excp.podroid.engine.avf.AvfDiagnostics.probe(context)
+                .copy(activeBackend = activeBackendId())
             val cpus = settingsRepository.getVmCpusSnapshot()
             val topology = if (cpus <= 1) "ONE_CPU" else "MATCH_HOST (all host cores)"
             appendLine("== AVF ==")
-            appendLine("backend = ${activeBackendId()}")
             appendLine("cpu setting = $cpus -> topology $topology")
             append(avf.pretty())
             appendLine("verboseLogging = ${settingsRepository.getAvfVerboseLoggingSnapshot()}")
