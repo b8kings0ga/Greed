@@ -30,6 +30,10 @@
     <string name="restart">重启</string>
     <string name="stop">停止</string>
     <string name="start_vm">启动虚拟机</string>
+    <string name="launcher_title">Ratatoskr 启动器</string>
+    <string name="launcher_subtitle">按当前默认配置启动内置虚拟机。</string>
+    <string name="launcher_starting_hint">虚拟机正在启动</string>
+    <string name="launcher_starting_detail">guest 启动完成后会自动拉起 Ratatoskr。</string>
     <string name="download">下载</string>
     <string name="later">稍后</string>
     <string name="dismiss">关闭</string>

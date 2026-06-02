@@ -36,7 +36,6 @@ import com.excp.podroid.engine.VmEngine
 import com.excp.podroid.engine.VmState
 import com.excp.podroid.engine.usb.UsbPassthroughManager
 import com.excp.podroid.util.NetworkUtils
-import com.excp.podroid.x11.X11Constants
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.combine
@@ -325,15 +324,6 @@ class PodroidService : Service() {
                         if (rules.none { it.hostPort == rule.hostPort && it.protocol == rule.protocol }) {
                             rules.add(rule)
                         }
-                    }
-
-                    // Always-on X11 viewer forwards. These are implicit, not user-managed —
-                    // they back the in-app screen toggle and never appear in the PortForward UI.
-                    if (rules.none { it.hostPort == X11Constants.VNC_PORT }) {
-                        rules.add(com.excp.podroid.data.repository.PortForwardRule(X11Constants.VNC_PORT, X11Constants.VNC_PORT, "tcp"))
-                    }
-                    if (rules.none { it.hostPort == X11Constants.AUDIO_PORT }) {
-                        rules.add(com.excp.podroid.data.repository.PortForwardRule(X11Constants.AUDIO_PORT, X11Constants.AUDIO_PORT, "tcp"))
                     }
 
                     val resources = detectMaxVmResources()
