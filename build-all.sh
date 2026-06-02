@@ -35,6 +35,8 @@ Commands:
   kernel        Build custom kernel only (podroid_kernel.config + Linux source)
   initramfs     Build custom kernel + Alpine VM initramfs (vmlinuz + initrd)
   rootfs        Build Alpine rootfs squashfs (alpine-rootfs.squashfs)
+  ratatoskr-image
+                Build/export the embedded Ratatoskr debug Docker image asset
   qemu          Build QEMU + podroid-bridge + podroid-launcher
   apk           Build the Android APK (also builds libtermux.so via Gradle NDK)
   deploy        Build APK, uninstall old version, and install to device
@@ -122,6 +124,7 @@ build_initramfs() {
 
 build_rootfs() {
     log "Building Alpine rootfs squashfs..."
+    sync_ratatoskr_image_for_rootfs
     local sysver
     sysver=$(grep -E '^[[:space:]]*versionCode[[:space:]]*=' "${SCRIPT_DIR}/app/build.gradle.kts" | grep -oE '[0-9]+' | head -1)
     docker build -f "${SCRIPT_DIR}/build-rootfs/Dockerfile.rootfs" \
@@ -132,13 +135,49 @@ build_rootfs() {
     success "Built ${ASSETS}/alpine-rootfs.squashfs ($(du -h "${ASSETS}/alpine-rootfs.squashfs" | cut -f1)), system-version ${sysver:-0}"
 }
 
+sync_ratatoskr_image_for_rootfs() {
+    local src="${ASSETS}/ratatoskr-debug-image.tar.zst"
+    local dest="${SCRIPT_DIR}/build-rootfs/files/opt/podroid/assets/ratatoskr-debug-image.tar.zst"
+    mkdir -p "$(dirname "$dest")"
+    [ -f "$src" ] || error "Missing required Ratatoskr debug image asset: ${src}. Run './build-all.sh ratatoskr-image' first."
+    cp "$src" "$dest"
+    log "Synced embedded Ratatoskr image into rootfs context ($(du -h "$dest" | cut -f1))."
+}
+
+build_ratatoskr_image() {
+    local mimir_dir="${MIMIR_DIR:-${SCRIPT_DIR}/../Mimir}"
+    local image_name="${RATATOSKR_IMAGE:-b8kings0ga/ratatoskr-debug:latest}"
+    local out="${ASSETS}/ratatoskr-debug-image.tar.zst"
+
+    [ -d "$mimir_dir" ] || error "Mimir repo not found at ${mimir_dir}. Set MIMIR_DIR=/path/to/Mimir."
+    command -v docker >/dev/null 2>&1 || error "docker is required to build the Ratatoskr image asset."
+    command -v zstd >/dev/null 2>&1 || error "zstd is required to compress the Ratatoskr image asset."
+
+    log "Building Ratatoskr debug image for linux/arm64 from ${mimir_dir}..."
+    if command -v task >/dev/null 2>&1 && [ -f "${mimir_dir}/Taskfile.yml" ]; then
+        (
+            cd "$mimir_dir"
+            TARGETARCH=arm64 IMAGE_NAME="$image_name" task docker:ratatoskr:debug:local
+        )
+    else
+        warn "task not found; falling back to docker build. This expects Mimir dist/bin/arm64 to already exist."
+        docker build --platform linux/arm64 --build-arg TARGETARCH=arm64 -t "$image_name" "$mimir_dir"
+    fi
+
+    mkdir -p "$ASSETS"
+    log "Exporting ${image_name} to ${out}..."
+    docker save "$image_name" | zstd -T0 -19 -o "$out" -f
+    sync_ratatoskr_image_for_rootfs
+    success "Ratatoskr debug image asset ready: ${out} ($(du -h "$out" | cut -f1))"
+}
+
 build_qemu() {
     local qemu_ver
     qemu_ver=$(grep -E '^podroidQemuVersion=' "${SCRIPT_DIR}/gradle.properties" | cut -d= -f2)
     log "Building QEMU ${qemu_ver} for Android ARM64 (Docker)..."
     
     docker build --build-arg "QEMU_VERSION=${qemu_ver}" \
-        -t podroid-qemu-builder --target final "${SCRIPT_DIR}"
+        -t podroid-qemu-builder --target qemu-final "${SCRIPT_DIR}"
         
     log "Extracting QEMU artifacts..."
     docker rm -f podroid-qemu-extract 2>/dev/null || true
@@ -158,6 +197,10 @@ build_qemu() {
 }
 
 build_apk() {
+    for asset in vmlinuz-virt initrd.img alpine-rootfs.squashfs ratatoskr-debug-image.tar.zst; do
+        [ -f "${ASSETS}/${asset}" ] || \
+            error "Missing required APK asset: ${ASSETS}/${asset}. Run './build-all.sh initramfs rootfs ratatoskr-image' first."
+    done
     log "Building APK via Gradle..."
     ./gradlew assembleDebug
     success "APK built: app/build/outputs/apk/debug/app-debug.apk"
@@ -194,7 +237,7 @@ run_boot_test() {
     log "Launching App..."
     adb shell am start -n "$pkg/$activity" >/dev/null 2>&1
     
-    echo -e "${YELLOW}>>> PLEASE PRESS 'Start Podman' IN THE APP NOW <<<${NC}"
+    echo -e "${YELLOW}>>> PLEASE PRESS 'Start VM' IN THE APP NOW <<<${NC}"
     
     # Poll console log
     log "Waiting for VM to boot (timeout: ${timeout}s)..."
@@ -249,11 +292,13 @@ case "$1" in
     kernel)    build_kernel ;;
     initramfs) build_initramfs ;;
     rootfs)    build_rootfs ;;
+    ratatoskr-image) build_ratatoskr_image ;;
     qemu)      build_qemu ;;
     apk)       build_apk ;;
     deploy)    build_apk && deploy_apk ;;
     test)      run_boot_test ;;
     all)
+        build_ratatoskr_image
         build_initramfs
         build_rootfs
         build_qemu

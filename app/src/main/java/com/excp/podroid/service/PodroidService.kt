@@ -9,6 +9,7 @@ package com.excp.podroid.service
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -320,6 +321,12 @@ class PodroidService : Service() {
                         rules.add(com.excp.podroid.data.repository.PortForwardRule(SSH_HOST_PORT, 22, "tcp"))
                     }
 
+                    for (rule in RATATOSKR_DEFAULT_FORWARDS) {
+                        if (rules.none { it.hostPort == rule.hostPort && it.protocol == rule.protocol }) {
+                            rules.add(rule)
+                        }
+                    }
+
                     // Always-on X11 viewer forwards. These are implicit, not user-managed —
                     // they back the in-app screen toggle and never appear in the PortForward UI.
                     if (rules.none { it.hostPort == X11Constants.VNC_PORT }) {
@@ -329,9 +336,10 @@ class PodroidService : Service() {
                         rules.add(com.excp.podroid.data.repository.PortForwardRule(X11Constants.AUDIO_PORT, X11Constants.AUDIO_PORT, "tcp"))
                     }
 
+                    val resources = detectMaxVmResources()
                     val config = VmConfig(
-                        ramMb = settingsRepository.getVmRamMbSnapshot(),
-                        cpus = settingsRepository.getVmCpusSnapshot(),
+                        ramMb = resources.ramMb,
+                        cpus = resources.cpus,
                         sshEnabled = sshEnabled,
                         androidIp = NetworkUtils.localIpv4(this@PodroidService),
                         storageSizeGb = settingsRepository.getStorageSizeGbSnapshot(),
@@ -341,6 +349,9 @@ class PodroidService : Service() {
                         verboseLogging = settingsRepository.getAvfVerboseLoggingSnapshot(),
                         x11Dpi = settingsRepository.getX11DpiSnapshot(),
                         usbPassthroughEnabled = settingsRepository.getUsbPassthroughEnabledSnapshot(),
+                        ratatoskrCpuTotalCompute = resources.nomadCpuTotalCompute,
+                        ratatoskrMemoryTotalMb = resources.nomadMemoryTotalMb,
+                        ratatoskrReservedMemoryMb = resources.nomadReservedMemoryMb,
                     )
                     serviceScope.launch { observeStateForHostBridge() }
                     if (config.usbPassthroughEnabled) {
@@ -416,6 +427,35 @@ class PodroidService : Service() {
         return getOrCreateNotificationBuilder()
             .setContentText(status)
             .build()
+    }
+
+    private data class AutoVmResources(
+        val cpus: Int,
+        val ramMb: Int,
+        val nomadCpuTotalCompute: Int,
+        val nomadMemoryTotalMb: Int,
+        val nomadReservedMemoryMb: Int,
+    )
+
+    private fun detectMaxVmResources(): AutoVmResources {
+        val cpus = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+        val am = getSystemService(ActivityManager::class.java)
+        val mi = ActivityManager.MemoryInfo()
+        am.getMemoryInfo(mi)
+
+        val totalMb = (mi.totalMem / (1024L * 1024L)).toInt().coerceAtLeast(512)
+        val hostReserveMb = maxOf(1536, totalMb / 8)
+        val vmRamMb = minOf(8192, totalMb - hostReserveMb).coerceAtLeast(512)
+        val nomadReservedMb = minOf(512, maxOf(128, vmRamMb / 8))
+        val nomadMemoryMb = (vmRamMb - nomadReservedMb).coerceAtLeast(256)
+
+        return AutoVmResources(
+            cpus = cpus,
+            ramMb = vmRamMb,
+            nomadCpuTotalCompute = cpus * 1000,
+            nomadMemoryTotalMb = nomadMemoryMb,
+            nomadReservedMemoryMb = nomadReservedMb,
+        )
     }
 
     private fun updateNotification(status: String) {
@@ -507,6 +547,16 @@ class PodroidService : Service() {
         const val ACTION_START   = "com.excp.podroid.action.START"
         const val ACTION_STOP    = "com.excp.podroid.action.STOP"
         const val SSH_HOST_PORT  = 9922
+
+        private val RATATOSKR_DEFAULT_FORWARDS = listOf(
+            com.excp.podroid.data.repository.PortForwardRule(14646, 14646, "tcp"),
+            com.excp.podroid.data.repository.PortForwardRule(14647, 14647, "tcp"),
+            com.excp.podroid.data.repository.PortForwardRule(14648, 14648, "tcp"),
+            com.excp.podroid.data.repository.PortForwardRule(14222, 14222, "tcp"),
+            com.excp.podroid.data.repository.PortForwardRule(14223, 14223, "tcp"),
+            com.excp.podroid.data.repository.PortForwardRule(14220, 14220, "tcp"),
+            com.excp.podroid.data.repository.PortForwardRule(7422, 7422, "tcp"),
+        )
 
         fun start(context: Context) {
             val intent = Intent(context, PodroidService::class.java).apply {

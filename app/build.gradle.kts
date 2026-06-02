@@ -100,6 +100,41 @@ android {
     }
 }
 
+abstract class RequireFileTask : DefaultTask() {
+    @get:org.gradle.api.tasks.InputFile
+    @get:org.gradle.api.tasks.PathSensitive(org.gradle.api.tasks.PathSensitivity.RELATIVE)
+    abstract val requiredFile: org.gradle.api.file.RegularFileProperty
+
+    @get:org.gradle.api.tasks.Input
+    abstract val hint: org.gradle.api.provider.Property<String>
+
+    @org.gradle.api.tasks.TaskAction
+    fun requireFile() {
+        val file = requiredFile.get().asFile
+        if (!file.isFile) {
+            throw GradleException("Missing required file: $file. ${hint.get()}")
+        }
+    }
+}
+
+val requiredVmAssets = mapOf(
+    "VmlinuzVirt" to "src/main/assets/vmlinuz-virt",
+    "InitrdImage" to "src/main/assets/initrd.img",
+    "AlpineRootfs" to "src/main/assets/alpine-rootfs.squashfs",
+    "RatatoskrDebugImage" to "src/main/assets/ratatoskr-debug-image.tar.zst",
+)
+
+requiredVmAssets.forEach { (name, path) ->
+    tasks.register<RequireFileTask>("require$name") {
+        requiredFile.set(layout.projectDirectory.file(path))
+        hint.set("Run './build-all.sh initramfs rootfs ratatoskr-image' before building the APK.")
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(requiredVmAssets.keys.map { "require$it" })
+}
+
 dependencies {
     // Core
     implementation(libs.androidx.core.ktx)

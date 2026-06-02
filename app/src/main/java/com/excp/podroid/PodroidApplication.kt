@@ -100,6 +100,7 @@ class PodroidApplication : Application() {
                 { copyAssetIfNeeded("vmlinuz-virt", filesDir, forceCopy) },
                 { copyAssetIfNeeded("initrd.img", filesDir, forceCopy) },
                 { copyAssetIfNeeded("alpine-rootfs.squashfs", filesDir, forceCopy) },
+                { copyAssetIfNeeded("ratatoskr-debug-image.tar.zst", filesDir, forceCopy) },
             )
             val pool = Executors.newFixedThreadPool(tasks.size.coerceAtMost(4))
             try {

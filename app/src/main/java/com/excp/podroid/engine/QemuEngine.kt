@@ -510,6 +510,9 @@ class QemuEngine @Inject constructor(
                 append(" androidip=").append(config.androidIp)
                 if (config.sshEnabled) append(" ssh=1")
                 append(" podroid.x11.dpi=").append(config.x11Dpi)
+                append(" ratatoskr.cpu_total_compute=").append(config.ratatoskrCpuTotalCompute)
+                append(" ratatoskr.memory_total_mb=").append(config.ratatoskrMemoryTotalMb)
+                append(" ratatoskr.reserved_memory_mb=").append(config.ratatoskrReservedMemoryMb)
             }
             args += "-append"; args += cmdline
         } else {

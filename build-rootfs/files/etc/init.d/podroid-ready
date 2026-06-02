@@ -3,7 +3,7 @@ description="Podroid VM ready marker (consumed by Android boot detector)"
 
 depend() {
     need podroid-network
-    after dropbear *
+    after dropbear podroid-ratatoskr *
 }
 
 start() {
@@ -19,6 +19,26 @@ start() {
             echo -1000 > "/proc/$_pid/oom_score_adj" 2>/dev/null
         done
     done
+
+    _ratatoskr_container=ratatoskr
+    if [ -r /etc/ratatoskr/env ]; then
+        _configured=$(sed -n 's/^RATATOSKR_CONTAINER=//p' /etc/ratatoskr/env 2>/dev/null | tail -1)
+        [ -n "$_configured" ] && _ratatoskr_container=$_configured
+    fi
+    if command -v docker >/dev/null 2>&1; then
+        _i=0
+        while [ "$_i" -lt 15 ]; do
+            _running=$(docker inspect -f '{{.State.Running}}' "$_ratatoskr_container" 2>/dev/null || true)
+            [ "$_running" = "true" ] && break
+            _i=$((_i + 1))
+            sleep 1
+        done
+        _running=$(docker inspect -f '{{.State.Running}}' "$_ratatoskr_container" 2>/dev/null || true)
+        if [ "$_running" != "true" ]; then
+            echo "Ratatoskr not running; continuing VM boot for diagnostics" > /dev/console
+            docker logs --tail 120 "$_ratatoskr_container" > /dev/console 2>&1 || true
+        fi
+    fi
 
     # Emit the boot stages PodroidQemu.detectBootStage() expects.
     echo "Starting SSH..." > /dev/console

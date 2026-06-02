@@ -1,0 +1,170 @@
+#!/sbin/openrc-run
+description="Podroid Ratatoskr deployment container"
+
+depend() {
+    need docker podroid-network
+    before podroid-ready
+}
+
+ENV_FILE=/etc/ratatoskr/env
+IMAGE_ARCHIVE=/opt/podroid/assets/ratatoskr-debug-image.tar.zst
+LOAD_STAMP_DIR=/mnt/persist/.podroid
+LOAD_STAMP="$LOAD_STAMP_DIR/ratatoskr-debug-image.sha256"
+RESOURCE_ENV=/run/ratatoskr-resources.env
+DOCKER_ENV=/run/ratatoskr-docker.env
+
+wait_for_docker() {
+    echo "Waiting for Docker API..." > /dev/console
+    for _i in $(seq 1 90); do
+        docker info >/dev/null 2>&1 && return 0
+        sleep 1
+    done
+    echo "Docker API did not become ready" > /dev/console
+    return 1
+}
+
+cmdline_value() {
+    sed -n "s/.*$1=\([^ ]*\).*/\1/p" /proc/cmdline 2>/dev/null | head -1
+}
+
+env_value() {
+    _key="$1"
+    _default="$2"
+    _value=$(
+        sed -n "s/^${_key}=//p" "$ENV_FILE" 2>/dev/null | tail -1
+    )
+    [ -n "$_value" ] && printf '%s\n' "$_value" || printf '%s\n' "$_default"
+}
+
+positive_int_or_default() {
+    case "$1" in
+        ''|*[!0-9]*|0) printf '%s\n' "$2" ;;
+        *) printf '%s\n' "$1" ;;
+    esac
+}
+
+write_resource_env() {
+    cpu_total=$(positive_int_or_default "$(cmdline_value ratatoskr.cpu_total_compute)" 1000)
+    memory_total=$(positive_int_or_default "$(cmdline_value ratatoskr.memory_total_mb)" 1024)
+    reserved_memory=$(positive_int_or_default "$(cmdline_value ratatoskr.reserved_memory_mb)" 128)
+
+    mkdir -p /run
+    {
+        printf 'CONF_nomad.client.cpu_total_compute=%s\n' "$cpu_total"
+        printf 'CONF_nomad.client.memory_total_mb=%s\n' "$memory_total"
+        printf 'CONF_nomad.client.reserved.memory=%s\n' "$reserved_memory"
+    } > "$RESOURCE_ENV"
+}
+
+load_image_if_needed() {
+    [ -f "$IMAGE_ARCHIVE" ] || {
+        echo "Ratatoskr image archive missing: $IMAGE_ARCHIVE" > /dev/console
+        return 1
+    }
+
+    mkdir -p "$LOAD_STAMP_DIR"
+    current=$(sha256sum "$IMAGE_ARCHIVE" | awk '{print $1}')
+    previous=$(cat "$LOAD_STAMP" 2>/dev/null || true)
+    if [ "$current" = "$previous" ] && docker image inspect "$RATATOSKR_IMAGE" >/dev/null 2>&1; then
+        echo "Ratatoskr image already loaded: $RATATOSKR_IMAGE" > /dev/console
+        return 0
+    fi
+
+    echo "Loading Ratatoskr debug image..." > /dev/console
+    if ! zstd -dc "$IMAGE_ARCHIVE" | docker load > /dev/console 2>&1; then
+        echo "Ratatoskr docker load failed" > /dev/console
+        return 1
+    fi
+    printf '%s\n' "$current" > "$LOAD_STAMP.tmp" && mv "$LOAD_STAMP.tmp" "$LOAD_STAMP"
+}
+
+append_env_file() {
+    _file="$1"
+    [ -r "$_file" ] || return 0
+
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        case "$_line" in
+            ''|'#'*) continue ;;
+            *=*)
+                _key=${_line%%=*}
+                case "$_key" in
+                    RATATOSKR_*|CONF_*)
+                        printf '%s\n' "$_line" >> "$DOCKER_ENV"
+                        ;;
+                esac
+                ;;
+        esac
+    done < "$_file"
+}
+
+start() {
+    ebegin "Starting Ratatoskr deployment"
+    echo "Starting Ratatoskr..." > /dev/console
+
+    RATATOSKR_IMAGE=$(env_value RATATOSKR_IMAGE b8kings0ga/ratatoskr-debug:latest)
+    RATATOSKR_CONTAINER=$(env_value RATATOSKR_CONTAINER ratatoskr)
+    RATATOSKR_ROLE=$(env_value RATATOSKR_ROLE client)
+    RATATOSKR_MODE=$(env_value RATATOSKR_MODE megin)
+
+    wait_for_docker || {
+        eend 1
+        return 1
+    }
+
+    write_resource_env
+    load_image_if_needed || {
+        eend 1
+        return 1
+    }
+
+    mkdir -p /mnt/persist/ratatoskr /var/lib/ratatoskr
+    mountpoint -q /var/lib/ratatoskr || mount --bind /mnt/persist/ratatoskr /var/lib/ratatoskr
+
+    docker rm -f "$RATATOSKR_CONTAINER" >/dev/console 2>&1 || true
+
+    docker_args="-d --restart unless-stopped"
+    docker_args="$docker_args --name $RATATOSKR_CONTAINER"
+    docker_args="$docker_args --privileged --cgroupns host --pid host --ipc host --network host"
+    docker_args="$docker_args -v /var/run/docker.sock:/var/run/docker.sock"
+    docker_args="$docker_args -v /sys/fs/cgroup:/sys/fs/cgroup:rw"
+    docker_args="$docker_args -v /mnt/persist/ratatoskr:/var/lib/ratatoskr"
+    docker_args="$docker_args -e RATATOSKR_ROLE=$RATATOSKR_ROLE"
+    docker_args="$docker_args -e RATATOSKR_MODE=$RATATOSKR_MODE"
+    docker_args="$docker_args -e CONF_nomad.server.enabled=false"
+    docker_args="$docker_args -e CONF_nomad.client.node_class=client"
+
+    : > "$DOCKER_ENV"
+    append_env_file "$RESOURCE_ENV"
+    append_env_file "$ENV_FILE"
+    docker_args="$docker_args --env-file $DOCKER_ENV"
+
+    # shellcheck disable=SC2086
+    if ! sh -c "docker run $docker_args '$RATATOSKR_IMAGE'" > /dev/console 2>&1; then
+        echo "Ratatoskr docker run failed" > /dev/console
+        docker logs "$RATATOSKR_CONTAINER" > /dev/console 2>&1 || true
+        eend 1
+        return 1
+    fi
+
+    for _i in $(seq 1 30); do
+        state=$(docker inspect -f '{{.State.Running}}' "$RATATOSKR_CONTAINER" 2>/dev/null || true)
+        [ "$state" = "true" ] && {
+            echo "Ratatoskr running" > /dev/console
+            eend 0
+            return 0
+        }
+        sleep 1
+    done
+
+    echo "Ratatoskr did not reach running state" > /dev/console
+    docker logs "$RATATOSKR_CONTAINER" > /dev/console 2>&1 || true
+    eend 1
+    return 1
+}
+
+stop() {
+    ebegin "Stopping Ratatoskr deployment"
+    RATATOSKR_CONTAINER=$(env_value RATATOSKR_CONTAINER ratatoskr)
+    docker stop -t 120 "$RATATOSKR_CONTAINER" >/dev/null 2>&1 || true
+    eend 0
+}

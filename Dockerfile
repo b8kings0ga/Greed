@@ -204,7 +204,7 @@ RUN cd /rootfs && find . | cpio -o -H newc 2>/dev/null | gzip -9 > /output/initr
 # SECTION 2: QEMU & Bridge (Android ARM64) Build
 # ==============================================================================
 
-FROM debian:bookworm AS qemu-builder
+FROM --platform=linux/amd64 debian:bookworm AS qemu-builder
 ARG QEMU_VERSION=11.0.0
 ENV QEMU_DIR=qemu-${QEMU_VERSION}
 ENV DEBIAN_FRONTEND=noninteractive
@@ -325,6 +325,14 @@ RUN cp /opt/qemu-out/bin/qemu-system-aarch64 /opt/qemu-out/libqemu-system-aarch6
     && cp /opt/qemu-out/lib/libslirp.so.0 /opt/qemu-out/libslirp.so \
     && patchelf --set-soname libslirp.so /opt/qemu-out/libslirp.so \
     && patchelf --replace-needed libslirp.so.0 libslirp.so /opt/qemu-out/libqemu-system-aarch64.so
+
+FROM scratch AS qemu-final
+COPY --from=qemu-builder /opt/qemu-out/libqemu-system-aarch64.so /libqemu-system-aarch64.so
+COPY --from=qemu-builder /opt/qemu-out/libslirp.so /libslirp.so
+COPY --from=qemu-builder /opt/qemu-out/libpodroid-bridge.so /libpodroid-bridge.so
+COPY --from=qemu-builder /opt/qemu-out/libpodroid-launcher.so /libpodroid-launcher.so
+COPY --from=qemu-builder /opt/qemu-out/share/qemu/efi-virtio.rom /qemu/efi-virtio.rom
+COPY --from=qemu-builder /opt/qemu-out/share/qemu/keymaps/ /qemu/keymaps/
 
 # ==============================================================================
 # SECTION 3: Final Artifacts Stage

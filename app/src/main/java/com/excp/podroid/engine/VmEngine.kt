@@ -91,4 +91,7 @@ data class VmConfig(
     val verboseLogging: Boolean = false,
     val x11Dpi: Int = 96,
     val usbPassthroughEnabled: Boolean = false,
+    val ratatoskrCpuTotalCompute: Int = 1000,
+    val ratatoskrMemoryTotalMb: Int = 1024,
+    val ratatoskrReservedMemoryMb: Int = 128,
 )

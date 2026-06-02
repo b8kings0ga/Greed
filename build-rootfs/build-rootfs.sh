@@ -40,6 +40,7 @@ apk -X "https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_BRANCH}/main" \
     doas sudo \
     gcompat \
     gzip \
+    zstd \
     xz \
     tigervnc \
     pulseaudio \
@@ -105,6 +106,7 @@ cp /work/files/etc/init.d/podroid-x11       "$ROOTFS/etc/init.d/"
 cp /work/files/etc/init.d/podroid-vsock     "$ROOTFS/etc/init.d/"
 cp /work/files/etc/init.d/podroid-hostd     "$ROOTFS/etc/init.d/"
 cp /work/files/etc/init.d/podroid-migrate   "$ROOTFS/etc/init.d/"
+cp /work/files/etc/init.d/podroid-ratatoskr "$ROOTFS/etc/init.d/"
 chmod +x "$ROOTFS/etc/init.d/podroid-"*
 
 # Copy /usr/local/bin scripts (resize daemon + login wrapper + getty selector)
@@ -130,6 +132,13 @@ ln -sf podroid-hostd "$ROOTFS/usr/local/bin/podroid-server"
 chmod +x "$ROOTFS/usr/local/bin/podroid-"*
 mkdir -p "$ROOTFS/etc/conf.d"
 cp /work/files/etc/conf.d/podroid "$ROOTFS/etc/conf.d/"
+# Ratatoskr defaults and required embedded image payload.
+mkdir -p "$ROOTFS/etc/ratatoskr" "$ROOTFS/opt/podroid/assets"
+cp /work/files/etc/ratatoskr/env "$ROOTFS/etc/ratatoskr/env"
+chmod 0644 "$ROOTFS/etc/ratatoskr/env"
+cp /work/files/opt/podroid/assets/ratatoskr-debug-image.tar.zst \
+    "$ROOTFS/opt/podroid/assets/ratatoskr-debug-image.tar.zst"
+chmod 0644 "$ROOTFS/opt/podroid/assets/ratatoskr-debug-image.tar.zst"
 # vsock agent's initial forward table (read at podroid-vsock startup).
 mkdir -p "$ROOTFS/etc/podroid"
 cp /work/files/etc/podroid/forwards.conf "$ROOTFS/etc/podroid/forwards.conf"
@@ -185,7 +194,7 @@ mkdir -p "$ROOTFS/etc/runlevels/default" "$ROOTFS/etc/runlevels/boot"
 # Guard each link: a dangling symlink (e.g. dnsmasq.lxcbr0, which lxc-bridge
 # may ship only as dnsmasq config and not an init script) makes OpenRC log
 # an error every boot and stalls podroid-ready's `after *` on a phantom.
-for svc in podroid-migrate podroid-bootstrap podroid-network podroid-resize dropbear docker lxc dnsmasq.lxcbr0 podroid-x11 podroid-vsock podroid-hostd podroid-ready; do
+for svc in podroid-migrate podroid-bootstrap podroid-network podroid-resize dropbear docker lxc dnsmasq.lxcbr0 podroid-x11 podroid-vsock podroid-hostd podroid-ratatoskr podroid-ready; do
     if [ -e "$ROOTFS/etc/init.d/$svc" ]; then
         ln -sf "/etc/init.d/$svc" "$ROOTFS/etc/runlevels/default/$svc"
     else

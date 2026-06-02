@@ -1,5 +1,6 @@
 package com.excp.podroid.ui.screens.home
 
+import android.app.ActivityManager
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -67,20 +68,19 @@ class HomeViewModel @Inject constructor(
 
     /** Aggregated metadata for the Home data sections. */
     val meta: StateFlow<HomeMeta> = combine(
-        settingsRepository.vmRamMb,
-        settingsRepository.vmCpus,
         settingsRepository.storageSizeGb,
         settingsRepository.sshEnabled,
         portForwardRepository.rules.map { it.size }.distinctUntilChanged(),
         settingsRepository.lastBootDurationMs,
-    ) { values ->
+    ) { storageGb, sshEnabled, portForwardCount, lastBootDurationMs ->
+        val auto = detectAutoVmResources()
         HomeMeta(
-            ramMb = values[0] as Int,
-            cpus = values[1] as Int,
-            storageGb = values[2] as Int,
-            sshEnabled = values[3] as Boolean,
-            portForwardCount = values[4] as Int,
-            lastBootDurationMs = values[5] as Long,
+            ramMb = auto.first,
+            cpus = auto.second,
+            storageGb = storageGb,
+            sshEnabled = sshEnabled,
+            portForwardCount = portForwardCount,
+            lastBootDurationMs = lastBootDurationMs,
         )
     }.stateIn(
         viewModelScope,
@@ -106,6 +106,16 @@ class HomeViewModel @Inject constructor(
 
     /** Phone IPv4 — cheap, lazily recomputed when the screen reads it. */
     fun phoneIp(): String = NetworkUtils.localIpv4(context)
+
+    private fun detectAutoVmResources(): Pair<Int, Int> {
+        val cpus = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+        val am = context.getSystemService(ActivityManager::class.java)
+        val mi = ActivityManager.MemoryInfo()
+        am.getMemoryInfo(mi)
+        val totalMb = (mi.totalMem / (1024L * 1024L)).toInt().coerceAtLeast(512)
+        val hostReserveMb = maxOf(1536, totalMb / 8)
+        return minOf(8192, totalMb - hostReserveMb).coerceAtLeast(512) to cpus
+    }
 
     private val _updateInfo = MutableStateFlow<UpdateInfo?>(null)
     val updateInfo: StateFlow<UpdateInfo?> = _updateInfo.asStateFlow()

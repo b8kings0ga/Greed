@@ -1,0 +1,288 @@
+version: '3'
+
+vars:
+  PACKAGE: '{{default "com.excp.podroid.debug" .PACKAGE}}'
+  ACTIVITY: '{{default "com.excp.podroid.MainActivity" .ACTIVITY}}'
+  APK: '{{default "" .APK}}'
+  ADB: '{{default "adb" .ADB}}'
+  MIMIR_DIR: '{{default "../Mimir" .MIMIR_DIR}}'
+  DIST_APK: '{{default "dist/podroid-debug.apk" .DIST_APK}}'
+  RATATOSKR_STAMP: '{{default ".ratatoskr-image-source.sha" .RATATOSKR_STAMP}}'
+  VEGVISIR_REGION: '{{default "brgru" .VEGVISIR_REGION}}'
+  VEGVISIR_NOMAD_RPC: >-
+    [200:fd04:ce3c:3f3f:644:e82d:67a0:68a0]:14647
+    [200:35ef:7ec1:4ebb:2ce1:1fb6:28b6:dcda]:14647
+    [200:5ffd:d183:f650:9155:7ad5:3003:5ecf]:14647
+  VEGVISIR_NATS: >-
+    nats://[200:fd04:ce3c:3f3f:644:e82d:67a0:68a0]:14222
+    nats://[200:35ef:7ec1:4ebb:2ce1:1fb6:28b6:dcda]:14222
+    nats://[200:5ffd:d183:f650:9155:7ad5:3003:5ecf]:14222
+
+tasks:
+  default:
+    desc: List available tasks.
+    cmds:
+      - task --list
+
+  devices:
+    desc: Show adb devices that are ready for sideloading.
+    cmds:
+      - |
+        set -eu
+        {{.ADB}} devices
+
+  vegvisir:update:
+    desc: Update Podroid Ratatoskr join targets from the local mim tree.
+    cmds:
+      - |
+        set -eu
+        mimir="{{.MIMIR_DIR}}"
+        region="{{.VEGVISIR_REGION}}"
+        test -d "$mimir/.git" || {
+          echo "Mimir repo not found: $mimir" >&2
+          exit 1
+        }
+        command -v mim >/dev/null 2>&1 || {
+          echo "mim command not found" >&2
+          exit 1
+        }
+        command -v jq >/dev/null 2>&1 || {
+          echo "jq is required to update vegvisir config" >&2
+          exit 1
+        }
+        tmp="$(mktemp)"
+        trap 'rm -f "$tmp"' EXIT
+        (
+          cd "$mimir"
+          mim tree
+        ) | tee "$tmp"
+
+        count="$(awk -v region="$region" '
+          $0 == "+- " region {in_region=1; next}
+          in_region && /^+- / {in_region=0}
+          in_region && /^      nomad / {count++}
+          END {print count + 0}
+        ' "$tmp")"
+        if [ "$count" -eq 0 ]; then
+          echo "No vegvisir servers found for region $region in mim tree output" >&2
+          exit 1
+        fi
+
+        retry_json="$(awk -v region="$region" '
+          $0 == "+- " region {in_region=1; next}
+          in_region && /^+- / {in_region=0}
+          in_region && /^      nomad / {sub(/^      nomad /, ""); print}
+        ' "$tmp" | jq -R -s -c 'split("\n")[:-1]')"
+        nats_json="$(awk -v region="$region" '
+          $0 == "+- " region {in_region=1; next}
+          in_region && /^+- / {in_region=0}
+          in_region && /^      nats / {sub(/^      nats /, ""); print}
+        ' "$tmp" | jq -R -s -c 'split("\n")[:-1]')"
+        rpc_block="$(awk -v region="$region" '
+          $0 == "+- " region {in_region=1; next}
+          in_region && /^+- / {in_region=0}
+          in_region && /^      nomad / {sub(/^      nomad /, ""); print "    " $0}
+        ' "$tmp")"
+        nats_block="$(awk -v region="$region" '
+          $0 == "+- " region {in_region=1; next}
+          in_region && /^+- / {in_region=0}
+          in_region && /^      nats / {sub(/^      nats /, ""); print "    " $0}
+        ' "$tmp")"
+
+        perl -0pi -e 's#CONF_nomad\.client\.server_join\.retry_join=\[[^\n]*\]#CONF_nomad.client.server_join.retry_join='"$retry_json"'#' build-rootfs/files/etc/ratatoskr/env
+        perl -0pi -e 's#CONF_bark\.identity\.nats_urls=\[[^\n]*\]#CONF_bark.identity.nats_urls='"$nats_json"'#' build-rootfs/files/etc/ratatoskr/env
+        perl -0pi -e 's#CONF_bark\.dns\.nats_urls=\[[^\n]*\]#CONF_bark.dns.nats_urls='"$nats_json"'#' build-rootfs/files/etc/ratatoskr/env
+
+        python3 - "$rpc_block" "$nats_block" <<'PY'
+        import pathlib
+        import re
+        import sys
+
+        path = pathlib.Path("Taskfile.yml")
+        text = path.read_text()
+        rpc = sys.argv[1].rstrip()
+        nats = sys.argv[2].rstrip()
+        text = re.sub(r"(  VEGVISIR_NOMAD_RPC: >-\n)(?:    .+\n)+(?=  VEGVISIR_NATS: >-)", r"\1" + rpc + "\n", text)
+        text = re.sub(r"(  VEGVISIR_NATS: >-\n)(?:    .+\n)+(?=\ntasks:)", r"\1" + nats + "\n", text)
+        if "tasks:" not in text:
+            raise SystemExit("Taskfile.yml rewrite failed")
+        path.write_text(text)
+        PY
+
+        echo "Updated Podroid vegvisir config for $region:"
+        printf '%s\n' "$rpc_block"
+        printf '%s\n' "$nats_block"
+
+  ratatoskr:status:
+    desc: Show whether the embedded Ratatoskr image is current with the local Mimir checkout.
+    cmds:
+      - |
+        set -eu
+        mimir="{{.MIMIR_DIR}}"
+        test -d "$mimir/.git" || {
+          echo "Mimir repo not found: $mimir" >&2
+          exit 1
+        }
+        current="$(task _ratatoskr:fingerprint)"
+        previous="$(cat "{{.RATATOSKR_STAMP}}" 2>/dev/null || true)"
+        echo "Mimir:     $mimir"
+        echo "Current:   $current"
+        echo "Previous:  ${previous:-<none>}"
+        if [ "$current" = "$previous" ] && [ -f app/src/main/assets/ratatoskr-debug-image.tar.zst ]; then
+          echo "Ratatoskr image asset is current."
+        else
+          echo "Ratatoskr image asset needs update."
+        fi
+
+  ratatoskr:update-apk:
+    desc: Rebuild Ratatoskr image only when Mimir changed, then rebuild rootfs and APK into dist/.
+    cmds:
+      - |
+        set -eu
+        mimir="{{.MIMIR_DIR}}"
+        test -d "$mimir/.git" || {
+          echo "Mimir repo not found: $mimir" >&2
+          exit 1
+        }
+        current="$(task _ratatoskr:fingerprint)"
+        previous="$(cat "{{.RATATOSKR_STAMP}}" 2>/dev/null || true)"
+        image_asset="app/src/main/assets/ratatoskr-debug-image.tar.zst"
+        rootfs_asset="app/src/main/assets/alpine-rootfs.squashfs"
+
+        if [ "$current" != "$previous" ] || [ ! -f "$image_asset" ]; then
+          echo "Ratatoskr image source changed; rebuilding embedded image."
+          MIMIR_DIR="$mimir" ./build-all.sh ratatoskr-image
+          printf '%s\n' "$current" > "{{.RATATOSKR_STAMP}}"
+        else
+          echo "Ratatoskr image source unchanged; keeping existing embedded image."
+        fi
+
+        if [ ! -f "$rootfs_asset" ] || [ "$current" != "$previous" ]; then
+          echo "Rebuilding rootfs so the embedded image/config is packaged."
+          ./build-all.sh rootfs
+        else
+          echo "Rootfs already present; skipping rootfs rebuild."
+        fi
+
+        if [ -d /opt/homebrew/opt/openjdk ]; then
+          export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}"
+          export PATH="$JAVA_HOME/bin:$PATH"
+        fi
+        ./build-all.sh apk
+        mkdir -p "$(dirname "{{.DIST_APK}}")"
+        cp app/build/outputs/apk/debug/app-debug.apk "{{.DIST_APK}}"
+        echo "APK ready: {{.DIST_APK}}"
+
+  ratatoskr:force-update-apk:
+    desc: Force rebuild Ratatoskr image, rootfs, and APK into dist/.
+    cmds:
+      - |
+        set -eu
+        rm -f "{{.RATATOSKR_STAMP}}"
+        task ratatoskr:update-apk
+
+  sideload:
+    desc: Install the already-built Podroid APK onto one adb device, then launch it.
+    cmds:
+      - |
+        set -eu
+        apk="{{.APK}}"
+        if [ -z "$apk" ]; then
+          apk=$(ls -t dist/*podroid*.apk dist/*.apk app/build/outputs/apk/debug/app-debug.apk 2>/dev/null | head -1 || true)
+        fi
+        test -f "$apk" || {
+          echo "APK not found. Build it first, or pass APK=/path/to/podroid.apk" >&2
+          exit 1
+        }
+        serial="${SERIAL:-}"
+        if [ -z "$serial" ]; then
+          serial="$({{.ADB}} devices | awk 'NR > 1 && $2 == "device" {print $1}')"
+          count=$(printf '%s\n' "$serial" | sed '/^$/d' | wc -l | tr -d ' ')
+          if [ "$count" -eq 0 ]; then
+            echo "No adb device in 'device' state. Run: task devices" >&2
+            exit 1
+          fi
+          if [ "$count" -gt 1 ]; then
+            echo "Multiple adb devices found. Choose one with: SERIAL=<serial> task sideload" >&2
+            printf '%s\n' "$serial" >&2
+            exit 1
+          fi
+        fi
+        echo "Installing $apk to $serial"
+        {{.ADB}} -s "$serial" install -r "$apk"
+        echo "Launching {{.PACKAGE}} on $serial"
+        {{.ADB}} -s "$serial" shell am force-stop "{{.PACKAGE}}" >/dev/null 2>&1 || true
+        {{.ADB}} -s "$serial" shell monkey -p "{{.PACKAGE}}" -c android.intent.category.LAUNCHER 1 >/dev/null
+        echo "Done. Fixed vegvisir Nomad RPC targets:"
+        printf '  %s\n' {{.VEGVISIR_NOMAD_RPC}}
+
+  sideload:no-launch:
+    desc: Install the already-built Podroid APK onto one adb device without launching it.
+    cmds:
+      - |
+        set -eu
+        apk="{{.APK}}"
+        if [ -z "$apk" ]; then
+          apk=$(ls -t dist/*podroid*.apk dist/*.apk app/build/outputs/apk/debug/app-debug.apk 2>/dev/null | head -1 || true)
+        fi
+        test -f "$apk" || {
+          echo "APK not found. Build it first, or pass APK=/path/to/podroid.apk" >&2
+          exit 1
+        }
+        serial="${SERIAL:-}"
+        if [ -z "$serial" ]; then
+          serial="$({{.ADB}} devices | awk 'NR > 1 && $2 == "device" {print $1}')"
+          count=$(printf '%s\n' "$serial" | sed '/^$/d' | wc -l | tr -d ' ')
+          if [ "$count" -eq 0 ]; then
+            echo "No adb device in 'device' state. Run: task devices" >&2
+            exit 1
+          fi
+          if [ "$count" -gt 1 ]; then
+            echo "Multiple adb devices found. Choose one with: SERIAL=<serial> task sideload:no-launch" >&2
+            printf '%s\n' "$serial" >&2
+            exit 1
+          fi
+        fi
+        echo "Installing $apk to $serial"
+        {{.ADB}} -s "$serial" install -r "$apk"
+
+  verify:ratatoskr:
+    desc: Check the running VM on one adb device for Ratatoskr and current vegvisir join targets.
+    cmds:
+      - |
+        set -eu
+        serial="${SERIAL:-}"
+        if [ -z "$serial" ]; then
+          serial="$({{.ADB}} devices | awk 'NR > 1 && $2 == "device" {print $1}')"
+          count=$(printf '%s\n' "$serial" | sed '/^$/d' | wc -l | tr -d ' ')
+          if [ "$count" -ne 1 ]; then
+            echo "Set SERIAL=<serial> when zero or multiple devices are connected." >&2
+            printf '%s\n' "$serial" >&2
+            exit 1
+          fi
+        fi
+        echo "Console markers:"
+        {{.ADB}} -s "$serial" shell run-as "{{.PACKAGE}}" tail -80 files/console.log || true
+        echo
+        echo "Expected fixed Nomad RPC targets:"
+        printf '  %s\n' {{.VEGVISIR_NOMAD_RPC}}
+        echo
+        echo "Expected fixed NATS targets:"
+        printf '  %s\n' {{.VEGVISIR_NATS}}
+
+  _ratatoskr:fingerprint:
+    cmds:
+      - |
+        set -eu
+        mimir="{{.MIMIR_DIR}}"
+        (
+          cd "$mimir"
+          git rev-parse HEAD
+          git status --porcelain=v1
+          git diff --binary
+          git ls-files --others --exclude-standard | while IFS= read -r file; do
+            [ -f "$file" ] || continue
+            printf 'UNTRACKED %s\n' "$file"
+            shasum -a 256 "$file"
+          done
+        ) | shasum -a 256 | awk '{print $1}'

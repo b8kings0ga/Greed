@@ -733,6 +733,9 @@ class AvfEngine @Inject constructor(
         val resolvedCmdline = ("console=hvc0 $earlycon root=/dev/ram0 mitigations=off " +
             "elevator=mq-deadline podroid.tty=hvc0 podroid.backend=avf podroid.epoch=$epoch " +
             "podroid.x11.dpi=${config.x11Dpi}$verboseFlags " +
+            "ratatoskr.cpu_total_compute=${config.ratatoskrCpuTotalCompute} " +
+            "ratatoskr.memory_total_mb=${config.ratatoskrMemoryTotalMb} " +
+            "ratatoskr.reserved_memory_mb=${config.ratatoskrReservedMemoryMb} " +
             config.kernelExtraCmdline).trim()
         AvfReflect.addParams(cb, resolvedCmdline)
         if (config.verboseLogging) {
