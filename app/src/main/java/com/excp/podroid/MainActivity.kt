@@ -48,10 +48,10 @@ class MainActivity : ComponentActivity() {
             val navVm: NavGraphViewModel = hiltViewModel()
             val darkTheme by navVm.darkTheme.collectAsStateWithLifecycle(initialValue = null)
             val dynamicColor by navVm.dynamicColorEnabled.collectAsStateWithLifecycle(initialValue = false)
-            val cameraPermissionLauncher = rememberLauncherForActivityResult(
-                ActivityResultContracts.RequestPermission(),
-            ) { granted ->
-                if (granted) cameraStreamManager.ensureServerStarted()
+            val permissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestMultiplePermissions(),
+            ) { grants ->
+                if (grants[Manifest.permission.CAMERA] == true) cameraStreamManager.ensureServerStarted()
             }
 
             LaunchedEffect(Unit) {
@@ -59,9 +59,15 @@ class MainActivity : ComponentActivity() {
                     == PackageManager.PERMISSION_GRANTED
                 ) {
                     cameraStreamManager.ensureServerStarted()
-                } else {
-                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                 }
+                val missing = listOf(
+                    Manifest.permission.CAMERA,
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                ).filter {
+                    ContextCompat.checkSelfPermission(this@MainActivity, it) != PackageManager.PERMISSION_GRANTED
+                }.toTypedArray()
+                if (missing.isNotEmpty()) permissionLauncher.launch(missing)
             }
 
             PodroidTheme(darkTheme = darkTheme, dynamicColor = dynamicColor) {

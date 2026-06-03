@@ -24,6 +24,10 @@
     <!-- Camera shim exposed to the guest through the host bridge. -->
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <!-- Location shim exposed to the guest through the host bridge. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
     <!-- Terminal bell haptic feedback (used by Termux terminal view) -->
     <uses-permission android:name="android.permission.VIBRATE" />
 

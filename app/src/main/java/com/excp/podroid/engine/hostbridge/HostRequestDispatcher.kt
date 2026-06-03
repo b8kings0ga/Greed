@@ -19,6 +19,7 @@ class HostRequestDispatcher(
     private val power: suspend (String) -> String,
     private val setHeadless: suspend (String) -> String,
     private val camera: suspend (String) -> String,
+    private val location: suspend (String) -> String,
 ) {
     private val validProtocols = setOf("tcp", "udp")
 
@@ -34,6 +35,7 @@ class HostRequestDispatcher(
                 "POWER" -> handlePower(parts)
                 "HEADLESS" -> handleHeadless(parts)
                 "CAMERA" -> handleCamera(parts)
+                "LOCATION" -> handleLocation(parts)
                 "PING" -> "PONG"
                 else -> HostProtocol.err("bad request")
             }
@@ -117,5 +119,12 @@ class HostRequestDispatcher(
         }
         if (p[1] !in setOf("select", "lazy") && p.size != 2) return HostProtocol.err("bad request")
         return camera(p.drop(1).joinToString(" "))
+    }
+
+    // LOCATION <current|status>
+    private suspend fun handleLocation(p: List<String>): String {
+        if (p.size != 2) return HostProtocol.err("bad request")
+        if (p[1] !in setOf("current", "status")) return HostProtocol.err("usage: current|status")
+        return location(p[1])
     }
 }

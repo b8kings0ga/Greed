@@ -51,6 +51,7 @@ class PodroidService : Service() {
     @Inject lateinit var notificationPoster: com.excp.podroid.engine.hostbridge.AndroidNotificationPoster
     @Inject lateinit var headlessModeManager: com.excp.podroid.engine.hostbridge.HeadlessModeManager
     @Inject lateinit var cameraStreamManager: com.excp.podroid.engine.hostbridge.camera.CameraStreamManager
+    @Inject lateinit var locationSenseManager: com.excp.podroid.engine.hostbridge.location.LocationSenseManager
     private var hostRequestServer: com.excp.podroid.engine.hostbridge.HostRequestServer? = null
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -280,6 +281,7 @@ class PodroidService : Service() {
             power = { handlePowerRequest(it) },
             setHeadless = { handleHeadlessRequest(it) },
             camera = { handleCameraRequest(it) },
+            location = { handleLocationRequest(it) },
         )
         return com.excp.podroid.engine.hostbridge.HostRequestServer(
             openTransport = { engine.openHostTransport() },
@@ -494,6 +496,12 @@ class PodroidService : Service() {
                 com.excp.podroid.engine.hostbridge.HostProtocol.err("usage: start|stop|status|url|list|select|lazy")
             }
         }
+    }
+
+    private suspend fun handleLocationRequest(action: String): String = when (action) {
+        "current" -> locationSenseManager.current()
+        "status" -> locationSenseManager.status()
+        else -> com.excp.podroid.engine.hostbridge.HostProtocol.err("usage: current|status")
     }
 
     // Reply returned now; the stop/restart is posted to the main looper so the
