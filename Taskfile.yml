@@ -11,6 +11,10 @@ vars:
   YOLO_VENV: '{{default ".venv-yolo" .YOLO_VENV}}'
   YOLO_SOURCE: '{{default "http://192.168.1.33:18080/stream.mjpg" .YOLO_SOURCE}}'
   YOLO_PORT: '{{default "18888" .YOLO_PORT}}'
+  YOLO_FPS: '{{default "3" .YOLO_FPS}}'
+  YOLO_CONF: '{{default "0.25" .YOLO_CONF}}'
+  YOLO_WORLD_CONF: '{{default "0.01" .YOLO_WORLD_CONF}}'
+  YOLO_CLASSES: '{{default "person,face,hand,phone,laptop,keyboard,mouse,monitor,bottle,cup,book,backpack,chair,table,door,window" .YOLO_CLASSES}}'
   VEGVISIR_REGION: '{{default "brgru" .VEGVISIR_REGION}}'
   VEGVISIR_NOMAD_RPC: >-
     [200:fd04:ce3c:3f3f:644:e82d:67a0:68a0]:14647
@@ -41,7 +45,8 @@ tasks:
         set -eu
         python3 -m venv "{{.YOLO_VENV}}"
         "{{.YOLO_VENV}}/bin/python" -m pip install --upgrade pip
-        "{{.YOLO_VENV}}/bin/python" -m pip install ultralytics opencv-python flask pillow
+        "{{.YOLO_VENV}}/bin/python" -m pip install ultralytics opencv-python flask pillow \
+          "git+https://github.com/ultralytics/CLIP.git"
 
   yolo:stream:
     desc: Run local YOLO detection on the Podroid camera stream.
@@ -51,7 +56,24 @@ tasks:
         test -x "{{.YOLO_VENV}}/bin/python" || task yolo:install
         "{{.YOLO_VENV}}/bin/python" tools/yolo_stream_viewer.py \
           --source "{{.YOLO_SOURCE}}" \
-          --port "{{.YOLO_PORT}}"
+          --port "{{.YOLO_PORT}}" \
+          --fps "{{.YOLO_FPS}}" \
+          --conf "{{.YOLO_CONF}}"
+
+  yolo:world:
+    desc: Run YOLO-World on the Podroid camera stream with a prefilled class list.
+    cmds:
+      - |
+        set -eu
+        test -x "{{.YOLO_VENV}}/bin/python" || task yolo:install
+        "{{.YOLO_VENV}}/bin/python" tools/yolo_stream_viewer.py \
+          --source "{{.YOLO_SOURCE}}" \
+          --port "{{.YOLO_PORT}}" \
+          --fps "{{.YOLO_FPS}}" \
+          --conf "{{.YOLO_WORLD_CONF}}" \
+          --world \
+          --model yolov8s-worldv2.pt \
+          --classes "{{.YOLO_CLASSES}}"
 
   vegvisir:update:
     desc: Update Podroid Ratatoskr join targets from the local mim tree.

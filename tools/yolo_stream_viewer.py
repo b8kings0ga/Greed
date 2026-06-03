@@ -40,6 +40,8 @@ HTML = """<!doctype html>
       <img id="frame" src="/frame.jpg" alt="YOLO annotated frame">
     </section>
     <aside class="panel">
+      <h2>Target Classes</h2>
+      <div id="classes" class="muted">loading</div>
       <h2>Objects</h2>
       <table>
         <thead><tr><th>class</th><th>count</th><th>best</th></tr></thead>
@@ -64,7 +66,10 @@ HTML = """<!doctype html>
       const r = await fetch("/detections.json?t=" + now);
       const data = await r.json();
       document.getElementById("meta").textContent =
-        `${data.source} · ${data.fps_target} fps target · capture ${data.capture_age_seconds.toFixed(1)}s · detection ${data.detection_age_seconds.toFixed(1)}s · frame ${data.detection_frame_age_seconds.toFixed(1)}s`;
+        `${data.mode} · ${data.source} · ${data.fps_target} fps target · capture ${data.capture_age_seconds.toFixed(1)}s · detection ${data.detection_age_seconds.toFixed(1)}s · frame ${data.detection_frame_age_seconds.toFixed(1)}s`;
+      document.getElementById("classes").innerHTML = (data.target_classes || [])
+        .map(c => `<span class="pill">${c}</span>`)
+        .join(" ");
       const objectRows = dedupeObjects(data);
       const objects = document.getElementById("objects");
       objects.innerHTML = "";
@@ -125,6 +130,8 @@ class DetectionState:
     lock: threading.Lock = field(default_factory=threading.Lock)
     source: str = ""
     fps_target: float = 1.0
+    mode: str = "yolo"
+    target_classes: list[str] = field(default_factory=list)
     latest_frame: Any | None = None
     capture_time: float = 0.0
     latest_jpeg: bytes | None = None
@@ -220,11 +227,13 @@ def capture_worker(state: DetectionState) -> None:
             time.sleep(0.2)
 
 
-def worker(state: DetectionState, model_name: str, imgsz: int, confidence: float) -> None:
+def worker(state: DetectionState, model_name: str, imgsz: int, confidence: float, world: bool) -> None:
     import cv2
-    from ultralytics import YOLO
+    from ultralytics import YOLO, YOLOWorld
 
-    model = YOLO(model_name)
+    model = YOLOWorld(model_name) if world else YOLO(model_name)
+    if world and state.target_classes:
+        model.set_classes(state.target_classes)
     period = 1.0 / max(0.1, state.fps_target)
 
     while True:
@@ -298,6 +307,8 @@ class Handler(BaseHTTPRequestHandler):
             return {
                 "source": self.state.source,
                 "fps_target": self.state.fps_target,
+                "mode": self.state.mode,
+                "target_classes": list(self.state.target_classes),
                 "detections": list(self.state.detections),
                 "objects": list(self.state.objects),
                 "seen_objects": seen_snapshot(self.state.seen_objects, now),
@@ -336,6 +347,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=18888)
     parser.add_argument("--fps", type=float, default=1.0)
     parser.add_argument("--model", default="yolov8n.pt")
+    parser.add_argument("--world", action="store_true", help="Use YOLO-World with the supplied text classes.")
+    parser.add_argument(
+        "--classes",
+        default="person,face,hand,phone,laptop,keyboard,mouse,monitor,bottle,cup,book,backpack,chair,table,door,window",
+        help="Comma-separated classes for YOLO-World.",
+    )
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--conf", type=float, default=0.25)
     return parser.parse_args()
@@ -343,13 +360,21 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    state = DetectionState(source=args.source, fps_target=args.fps)
+    target_classes = [c.strip() for c in args.classes.split(",") if c.strip()]
+    state = DetectionState(
+        source=args.source,
+        fps_target=args.fps,
+        mode="yolo-world" if args.world else "yolo",
+        target_classes=target_classes if args.world else [],
+    )
     Handler.state = state
     threading.Thread(target=capture_worker, args=(state,), daemon=True).start()
-    threading.Thread(target=worker, args=(state, args.model, args.imgsz, args.conf), daemon=True).start()
+    threading.Thread(target=worker, args=(state, args.model, args.imgsz, args.conf, args.world), daemon=True).start()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"YOLO viewer: http://{args.host}:{args.port}")
     print(f"Source: {args.source}")
+    if args.world:
+        print(f"YOLO-World classes: {', '.join(target_classes)}")
     server.serve_forever()
 
 
