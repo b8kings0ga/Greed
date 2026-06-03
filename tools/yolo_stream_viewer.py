@@ -27,6 +27,9 @@ HTML = """<!doctype html>
     th, td { text-align: left; padding: 7px 4px; border-bottom: 1px solid #29313d; }
     .muted { color: #94a3b8; }
     .pill { padding: 2px 7px; background: #243044; border-radius: 999px; }
+    .class-form { display: grid; gap: 8px; margin: 8px 0 12px; }
+    textarea { width: 100%; box-sizing: border-box; min-height: 72px; resize: vertical; background: #0f1115; color: #f1f5f9; border: 1px solid #29313d; padding: 8px; font: inherit; }
+    button { justify-self: start; background: #38d399; color: #07110d; border: 0; padding: 7px 12px; font-weight: 700; cursor: pointer; }
     @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -41,6 +44,11 @@ HTML = """<!doctype html>
     </section>
     <aside class="panel">
       <h2>Target Classes</h2>
+      <div class="class-form">
+        <textarea id="classInput" spellcheck="false" placeholder="person, phone, bottle"></textarea>
+        <button id="applyClasses" type="button">Apply Classes</button>
+        <div id="classStatus" class="muted"></div>
+      </div>
       <div id="classes" class="muted">loading</div>
       <h2>Objects</h2>
       <table>
@@ -65,6 +73,9 @@ HTML = """<!doctype html>
       document.getElementById("frame").src = "/frame.jpg?t=" + now;
       const r = await fetch("/detections.json?t=" + now);
       const data = await r.json();
+      if (!window.classInputDirty) {
+        document.getElementById("classInput").value = (data.target_classes || []).join(", ");
+      }
       document.getElementById("meta").textContent =
         `${data.mode} · ${data.source} · ${data.fps_target} fps target · capture ${data.capture_age_seconds.toFixed(1)}s · detection ${data.detection_age_seconds.toFixed(1)}s · frame ${data.detection_frame_age_seconds.toFixed(1)}s`;
       document.getElementById("classes").innerHTML = (data.target_classes || [])
@@ -99,6 +110,20 @@ HTML = """<!doctype html>
           `<tr><td>${d.name}</td><td>${d.confidence.toFixed(2)}</td><td>${d.box.map(v => Math.round(v)).join(", ")}</td></tr>`);
       }
     }
+    async function applyClasses() {
+      const raw = document.getElementById("classInput").value;
+      const status = document.getElementById("classStatus");
+      status.textContent = "applying";
+      const r = await fetch("/classes", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({classes: raw})
+      });
+      const data = await r.json();
+      status.textContent = data.ok ? `applied ${data.target_classes.length} classes` : `error: ${data.error}`;
+      window.classInputDirty = false;
+      await refresh();
+    }
     function dedupeObjects(data) {
       const byName = new Map();
       for (const item of data.objects || []) {
@@ -118,6 +143,8 @@ HTML = """<!doctype html>
         .sort((a, b) => b.count - a.count || b.best_confidence - a.best_confidence || a.name.localeCompare(b.name));
     }
     refresh();
+    document.getElementById("classInput").addEventListener("input", () => { window.classInputDirty = true; });
+    document.getElementById("applyClasses").addEventListener("click", applyClasses);
     setInterval(refresh, 1000);
   </script>
 </body>
@@ -132,6 +159,7 @@ class DetectionState:
     fps_target: float = 1.0
     mode: str = "yolo"
     target_classes: list[str] = field(default_factory=list)
+    classes_version: int = 0
     latest_frame: Any | None = None
     capture_time: float = 0.0
     latest_jpeg: bytes | None = None
@@ -195,6 +223,22 @@ def seen_snapshot(seen: dict[str, dict[str, Any]], now: float) -> list[dict[str,
     return sorted(rows, key=lambda x: (x["last_seen_ago_seconds"], -x["total_count"], x["name"]))
 
 
+def parse_classes(value: str | list[Any]) -> list[str]:
+    if isinstance(value, list):
+        raw = ",".join(str(v) for v in value)
+    else:
+        raw = value
+    seen = set()
+    classes = []
+    for item in raw.replace("\n", ",").split(","):
+        name = " ".join(item.strip().split())
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        classes.append(name)
+    return classes
+
+
 def capture_worker(state: DetectionState) -> None:
     import cv2
 
@@ -232,8 +276,7 @@ def worker(state: DetectionState, model_name: str, imgsz: int, confidence: float
     from ultralytics import YOLO, YOLOWorld
 
     model = YOLOWorld(model_name) if world else YOLO(model_name)
-    if world and state.target_classes:
-        model.set_classes(state.target_classes)
+    applied_classes_version = -1
     period = 1.0 / max(0.1, state.fps_target)
 
     while True:
@@ -245,6 +288,14 @@ def worker(state: DetectionState, model_name: str, imgsz: int, confidence: float
         if frame is None:
             time.sleep(0.05)
             continue
+
+        if world:
+            with state.lock:
+                classes = list(state.target_classes)
+                classes_version = state.classes_version
+            if classes and classes_version != applied_classes_version:
+                model.set_classes(classes)
+                applied_classes_version = classes_version
 
         results = model.predict(frame, imgsz=imgsz, conf=confidence, verbose=False)
         names = results[0].names
@@ -275,6 +326,31 @@ def worker(state: DetectionState, model_name: str, imgsz: int, confidence: float
 
 class Handler(BaseHTTPRequestHandler):
     state: DetectionState
+
+    def do_POST(self) -> None:
+        if self.path.startswith("/classes"):
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length).decode("utf-8")
+            try:
+                payload = json.loads(body) if body else {}
+                classes = parse_classes(payload.get("classes", ""))
+                if not classes:
+                    self.write_json({"ok": False, "error": "class list is empty"})
+                    return
+                with self.state.lock:
+                    self.state.target_classes = classes
+                    self.state.classes_version += 1
+                    self.state.detections = []
+                    self.state.objects = []
+                    self.state.seen_objects = {}
+                    self.state.detection_time = 0.0
+                    self.state.detection_capture_time = 0.0
+                self.write_json({"ok": True, "target_classes": classes})
+            except Exception as e:
+                self.write_json({"ok": False, "error": str(e)})
+            return
+        self.send_response(404)
+        self.end_headers()
 
     def do_GET(self) -> None:
         if self.path.startswith("/detections.json"):
@@ -360,7 +436,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    target_classes = [c.strip() for c in args.classes.split(",") if c.strip()]
+    target_classes = parse_classes(args.classes)
     state = DetectionState(
         source=args.source,
         fps_target=args.fps,
