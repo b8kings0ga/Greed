@@ -34,6 +34,9 @@
     <string name="launcher_subtitle">Launches the embedded VM with the current default configuration.</string>
     <string name="launcher_starting_hint">VM is starting</string>
     <string name="launcher_starting_detail">Ratatoskr will start automatically after the guest finishes booting.</string>
+    <string name="launcher_logs_title">Ratatoskr Logs</string>
+    <string name="launcher_logs_subtitle">Current guest console tail. Scroll to inspect.</string>
+    <string name="launcher_logs_waiting">Waiting for guest console output…</string>
     <string name="download">Download</string>
     <string name="later">Later</string>
     <string name="dismiss">Dismiss</string>

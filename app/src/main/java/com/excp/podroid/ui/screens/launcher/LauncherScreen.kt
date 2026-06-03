@@ -32,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -54,7 +55,11 @@ fun LauncherScreen(
 ) {
     val vmState by viewModel.vmState.collectAsStateWithLifecycle()
     val bootStage by viewModel.bootStage.collectAsStateWithLifecycle()
+    val consoleText by viewModel.consoleText.collectAsStateWithLifecycle()
+    val sshEnabled by viewModel.sshEnabled.collectAsStateWithLifecycle()
+    val uptimeTick by viewModel.uptimeTicker.collectAsStateWithLifecycle()
     val isCompactHeight = windowSizeClass.heightSizeClass == WindowHeightSizeClass.Compact
+    val uptimeLabel = viewModel.uptimeLabel(uptimeTick)
 
     LaunchedEffect(Unit) {
         viewModel.ensureAutoStart()
@@ -83,16 +88,28 @@ fun LauncherScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = PodroidTokens.Spacing.XL, vertical = PodroidTokens.Spacing.XL),
                 verticalArrangement = Arrangement.spacedBy(PodroidTokens.Spacing.LG),
             ) {
-                LauncherStatusCard(vmState = vmState, bootStage = bootStage)
+                LauncherStatusCard(
+                    vmState = vmState,
+                    bootStage = bootStage,
+                    phoneIp = viewModel.phoneIp,
+                    bootDuration = viewModel.bootDurationLabel(),
+                    uptimeLabel = uptimeLabel,
+                    sshCommand = viewModel.sshCommand(),
+                    resourcesLabel = viewModel.autoResourcesLabel(),
+                    sshEnabled = sshEnabled,
+                )
                 LauncherActions(
                     vmState = vmState,
                     onStart = viewModel::startVm,
                     onStop = viewModel::stopVm,
                     onRestart = viewModel::restartVm,
+                )
+                LogPanel(
+                    text = consoleText,
+                    modifier = Modifier.weight(1f),
                 )
             }
         }
@@ -103,6 +120,12 @@ fun LauncherScreen(
 private fun LauncherStatusCard(
     vmState: VmState,
     bootStage: String,
+    phoneIp: String,
+    bootDuration: String?,
+    uptimeLabel: String?,
+    sshCommand: String?,
+    resourcesLabel: String,
+    sshEnabled: Boolean,
 ) {
     val (label, color) = when (vmState) {
         is VmState.Running -> stringResource(R.string.status_running) to PodroidStatusColors.Running
@@ -130,6 +153,31 @@ private fun LauncherStatusCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             PodroidStatus(label = label, dotColor = color)
+            LauncherMetaRow(
+                label = stringResource(R.string.phone_ip),
+                value = phoneIp,
+            )
+            LauncherMetaRow(
+                label = stringResource(R.string.resources),
+                value = resourcesLabel,
+            )
+            bootDuration?.let {
+                LauncherMetaRow(
+                    label = stringResource(R.string.booted_in),
+                    value = it,
+                )
+            }
+            uptimeLabel?.let {
+                LauncherMetaRow(
+                    label = stringResource(R.string.up),
+                    value = it,
+                )
+            }
+            LauncherMetaRow(
+                label = stringResource(R.string.ssh),
+                value = if (sshEnabled) sshCommand ?: stringResource(R.string.none) else stringResource(R.string.off),
+                mono = sshEnabled,
+            )
             if (bootStage.isNotBlank() && vmState is VmState.Starting) {
                 Text(
                     text = bootStage,
@@ -146,6 +194,34 @@ private fun LauncherStatusCard(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun LauncherMetaRow(
+    label: String,
+    value: String,
+    mono: Boolean = false,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(PodroidTokens.Spacing.MD))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontFamily = if (mono) FontFamily.Monospace else null,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -206,5 +282,57 @@ private fun LauncherActions(
             }
         }
         Spacer(Modifier.height(1.dp))
+    }
+}
+
+@Composable
+private fun LogPanel(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    val scrollState = rememberScrollState()
+    val displayText = text.ifBlank { "" }
+    val bodyText = if (displayText.isBlank()) {
+        stringResource(R.string.launcher_logs_waiting)
+    } else {
+        displayText.takeLast(4000)
+    }
+
+    LaunchedEffect(bodyText) {
+        scrollState.scrollTo(scrollState.maxValue)
+    }
+
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(PodroidTokens.Spacing.LG),
+            verticalArrangement = Arrangement.spacedBy(PodroidTokens.Spacing.SM),
+        ) {
+            Column {
+                Text(
+                    text = stringResource(R.string.launcher_logs_title),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    text = stringResource(R.string.launcher_logs_subtitle),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                text = bodyText,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .verticalScroll(scrollState),
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }

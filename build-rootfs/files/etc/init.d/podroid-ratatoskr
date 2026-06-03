@@ -12,6 +12,8 @@ LOAD_STAMP_DIR=/mnt/persist/.podroid
 LOAD_STAMP="$LOAD_STAMP_DIR/ratatoskr-debug-image.sha256"
 RESOURCE_ENV=/run/ratatoskr-resources.env
 DOCKER_ENV=/run/ratatoskr-docker.env
+LOG_FOLLOW_PID=/run/ratatoskr-docker-logs.pid
+LOG_FOLLOW_OUT=/var/log/ratatoskr-follow.log
 
 wait_for_docker() {
     echo "Waiting for Docker API..." > /dev/console
@@ -97,6 +99,32 @@ append_env_file() {
     done < "$_file"
 }
 
+stop_log_follow() {
+    if [ -f "$LOG_FOLLOW_PID" ]; then
+        start-stop-daemon --stop --pidfile "$LOG_FOLLOW_PID" >/dev/null 2>&1 || true
+        rm -f "$LOG_FOLLOW_PID"
+    fi
+}
+
+console_output_device() {
+    if grep -qw 'podroid.backend=avf' /proc/cmdline 2>/dev/null; then
+        printf '%s\n' /dev/console
+    elif [ -e /dev/ttyAMA0 ]; then
+        printf '%s\n' /dev/ttyAMA0
+    else
+        printf '%s\n' /dev/console
+    fi
+}
+
+start_log_follow() {
+    stop_log_follow
+    _console_device=$(console_output_device)
+    start-stop-daemon --start --background \
+        --make-pidfile --pidfile "$LOG_FOLLOW_PID" \
+        --stdout "$LOG_FOLLOW_OUT" --stderr "$LOG_FOLLOW_OUT" \
+        --exec /bin/sh -- -c "exec docker logs -f --tail 200 '$RATATOSKR_CONTAINER' > '$_console_device' 2>&1"
+}
+
 start() {
     ebegin "Starting Ratatoskr deployment"
     echo "Starting Ratatoskr..." > /dev/console
@@ -120,6 +148,7 @@ start() {
     mkdir -p /mnt/persist/ratatoskr /var/lib/ratatoskr
     mountpoint -q /var/lib/ratatoskr || mount --bind /mnt/persist/ratatoskr /var/lib/ratatoskr
 
+    stop_log_follow
     docker rm -f "$RATATOSKR_CONTAINER" >/dev/console 2>&1 || true
 
     docker_args="-d --restart unless-stopped"
@@ -149,6 +178,7 @@ start() {
     for _i in $(seq 1 30); do
         state=$(docker inspect -f '{{.State.Running}}' "$RATATOSKR_CONTAINER" 2>/dev/null || true)
         [ "$state" = "true" ] && {
+            start_log_follow
             echo "Ratatoskr running" > /dev/console
             eend 0
             return 0
@@ -165,6 +195,7 @@ start() {
 stop() {
     ebegin "Stopping Ratatoskr deployment"
     RATATOSKR_CONTAINER=$(env_value RATATOSKR_CONTAINER ratatoskr)
+    stop_log_follow
     docker stop -t 120 "$RATATOSKR_CONTAINER" >/dev/null 2>&1 || true
     eend 0
 }

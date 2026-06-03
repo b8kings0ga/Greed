@@ -34,6 +34,9 @@
     <string name="launcher_subtitle">按当前默认配置启动内置虚拟机。</string>
     <string name="launcher_starting_hint">虚拟机正在启动</string>
     <string name="launcher_starting_detail">guest 启动完成后会自动拉起 Ratatoskr。</string>
+    <string name="launcher_logs_title">Ratatoskr 日志</string>
+    <string name="launcher_logs_subtitle">当前 guest console 尾部输出，可滚动查看。</string>
+    <string name="launcher_logs_waiting">等待 guest console 输出…</string>
     <string name="download">下载</string>
     <string name="later">稍后</string>
     <string name="dismiss">关闭</string>

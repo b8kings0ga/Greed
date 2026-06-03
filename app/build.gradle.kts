@@ -121,7 +121,6 @@ val requiredVmAssets = mapOf(
     "VmlinuzVirt" to "src/main/assets/vmlinuz-virt",
     "InitrdImage" to "src/main/assets/initrd.img",
     "AlpineRootfs" to "src/main/assets/alpine-rootfs.squashfs",
-    "RatatoskrDebugImage" to "src/main/assets/ratatoskr-debug-image.tar.zst",
 )
 
 requiredVmAssets.forEach { (name, path) ->

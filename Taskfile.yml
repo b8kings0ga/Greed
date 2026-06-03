@@ -125,10 +125,11 @@ tasks:
         }
         current="$(task _ratatoskr:fingerprint)"
         previous="$(cat "{{.RATATOSKR_STAMP}}" 2>/dev/null || true)"
+        image_asset="build-rootfs/files/opt/podroid/assets/ratatoskr-debug-image.tar.zst"
         echo "Mimir:     $mimir"
         echo "Current:   $current"
         echo "Previous:  ${previous:-<none>}"
-        if [ "$current" = "$previous" ] && [ -f app/src/main/assets/ratatoskr-debug-image.tar.zst ]; then
+        if [ "$current" = "$previous" ] && [ -f "$image_asset" ]; then
           echo "Ratatoskr image asset is current."
         else
           echo "Ratatoskr image asset needs update."
@@ -146,8 +147,7 @@ tasks:
         }
         current="$(task _ratatoskr:fingerprint)"
         previous="$(cat "{{.RATATOSKR_STAMP}}" 2>/dev/null || true)"
-        image_asset="app/src/main/assets/ratatoskr-debug-image.tar.zst"
-        rootfs_asset="app/src/main/assets/alpine-rootfs.squashfs"
+        image_asset="build-rootfs/files/opt/podroid/assets/ratatoskr-debug-image.tar.zst"
 
         if [ "$current" != "$previous" ] || [ ! -f "$image_asset" ]; then
           echo "Ratatoskr image source changed; rebuilding embedded image."
@@ -157,12 +157,8 @@ tasks:
           echo "Ratatoskr image source unchanged; keeping existing embedded image."
         fi
 
-        if [ ! -f "$rootfs_asset" ] || [ "$current" != "$previous" ]; then
-          echo "Rebuilding rootfs so the embedded image/config is packaged."
-          ./build-all.sh rootfs
-        else
-          echo "Rootfs already present; skipping rootfs rebuild."
-        fi
+        echo "Rebuilding rootfs so embedded image/config/service changes are packaged."
+        ./build-all.sh rootfs
 
         if [ -d /opt/homebrew/opt/openjdk ]; then
           export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk}"
@@ -172,6 +168,11 @@ tasks:
         mkdir -p "$(dirname "{{.DIST_APK}}")"
         cp app/build/outputs/apk/debug/app-debug.apk "{{.DIST_APK}}"
         echo "APK ready: {{.DIST_APK}}"
+
+  update:
+    desc: Alias for ratatoskr:update-apk.
+    cmds:
+      - task ratatoskr:update-apk
 
   ratatoskr:force-update-apk:
     desc: Force rebuild Ratatoskr image, rootfs, and APK into dist/.

@@ -136,18 +136,20 @@ build_rootfs() {
 }
 
 sync_ratatoskr_image_for_rootfs() {
-    local src="${ASSETS}/ratatoskr-debug-image.tar.zst"
+    local src="${SCRIPT_DIR}/build-rootfs/files/opt/podroid/assets/ratatoskr-debug-image.tar.zst"
+    local legacy="${ASSETS}/ratatoskr-debug-image.tar.zst"
     local dest="${SCRIPT_DIR}/build-rootfs/files/opt/podroid/assets/ratatoskr-debug-image.tar.zst"
     mkdir -p "$(dirname "$dest")"
     [ -f "$src" ] || error "Missing required Ratatoskr debug image asset: ${src}. Run './build-all.sh ratatoskr-image' first."
-    cp "$src" "$dest"
+    [ "$src" = "$dest" ] || cp "$src" "$dest"
+    rm -f "$legacy"
     log "Synced embedded Ratatoskr image into rootfs context ($(du -h "$dest" | cut -f1))."
 }
 
 build_ratatoskr_image() {
     local mimir_dir="${MIMIR_DIR:-${SCRIPT_DIR}/../Mimir}"
     local image_name="${RATATOSKR_IMAGE:-b8kings0ga/ratatoskr-debug:latest}"
-    local out="${ASSETS}/ratatoskr-debug-image.tar.zst"
+    local out="${SCRIPT_DIR}/build-rootfs/files/opt/podroid/assets/ratatoskr-debug-image.tar.zst"
 
     [ -d "$mimir_dir" ] || error "Mimir repo not found at ${mimir_dir}. Set MIMIR_DIR=/path/to/Mimir."
     command -v docker >/dev/null 2>&1 || error "docker is required to build the Ratatoskr image asset."
@@ -164,7 +166,7 @@ build_ratatoskr_image() {
         docker build --platform linux/arm64 --build-arg TARGETARCH=arm64 -t "$image_name" "$mimir_dir"
     fi
 
-    mkdir -p "$ASSETS"
+    mkdir -p "$(dirname "$out")"
     log "Exporting ${image_name} to ${out}..."
     docker save "$image_name" | zstd -T0 -19 -o "$out" -f
     sync_ratatoskr_image_for_rootfs
@@ -197,10 +199,12 @@ build_qemu() {
 }
 
 build_apk() {
-    for asset in vmlinuz-virt initrd.img alpine-rootfs.squashfs ratatoskr-debug-image.tar.zst; do
+    for asset in vmlinuz-virt initrd.img alpine-rootfs.squashfs; do
         [ -f "${ASSETS}/${asset}" ] || \
             error "Missing required APK asset: ${ASSETS}/${asset}. Run './build-all.sh initramfs rootfs ratatoskr-image' first."
     done
+    [ -f "${SCRIPT_DIR}/build-rootfs/files/opt/podroid/assets/ratatoskr-debug-image.tar.zst" ] || \
+        error "Missing required Ratatoskr rootfs payload: ${SCRIPT_DIR}/build-rootfs/files/opt/podroid/assets/ratatoskr-debug-image.tar.zst. Run './build-all.sh ratatoskr-image' first."
     log "Building APK via Gradle..."
     ./gradlew assembleDebug
     success "APK built: app/build/outputs/apk/debug/app-debug.apk"

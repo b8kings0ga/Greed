@@ -325,8 +325,8 @@ class AvfEngine @Inject constructor(
             // Fan out: VM ↔ filesystem socket. The bridge subprocess connects to
             // that socket and splices PTY ↔ socket. BootStageDetector tees the
             // VM output to drive boot-stage + state transitions; onVmBytes tees
-            // the boot-phase bytes (Starting only — see the privacy note there)
-            // to console.log + the consoleText flow.
+            // boot-phase bytes to console.log, and keeps an in-memory console
+            // tail for the launcher/status UI across the whole session.
             val fo = ConsoleFanout(
                 consoleOutput = inStream,
                 consoleInput = outStream,
@@ -341,26 +341,27 @@ class AvfEngine @Inject constructor(
                     // console.log would leak the whole session into the exportable
                     // diagnostic log. Boot output (incl. boot-time kernel panics like
                     // issue #29) is still captured; a later death's reason still lands
-                    // via the onStopped/onDied callbacks.
+                    // via the onStopped/onDied callbacks. The on-screen launcher tail
+                    // stays in-memory only so runtime service logs remain visible.
                     if (_state.value is VmState.Starting) {
                         runCatching {
                             log?.write(buf, 0, n)
                             log?.flush()
                         }
-                        // UTF-8 decode best-effort (split multi-byte sequences may
-                        // surface as U+FFFD here — acceptable for the diagnostic
-                        // tail; the raw bytes hit disk faithfully above).
-                        // Guard the StringBuilder: this runs on the fanout pump thread
-                        // while start() may clear it on another (fast Stop → Start).
-                        val snapshot = synchronized(consoleLock) {
-                            consoleBuilder.append(String(buf, 0, n, Charsets.UTF_8))
-                            if (consoleBuilder.length > maxConsoleSize) {
-                                consoleBuilder.delete(0, consoleBuilder.length - maxConsoleSize)
-                            }
-                            consoleBuilder.toString()
-                        }
-                        _consoleText.value = snapshot
                     }
+                    // UTF-8 decode best-effort (split multi-byte sequences may
+                    // surface as U+FFFD here — acceptable for the in-memory tail;
+                    // the raw boot bytes hit disk faithfully above).
+                    // Guard the StringBuilder: this runs on the fanout pump thread
+                    // while start() may clear it on another (fast Stop → Start).
+                    val snapshot = synchronized(consoleLock) {
+                        consoleBuilder.append(String(buf, 0, n, Charsets.UTF_8))
+                        if (consoleBuilder.length > maxConsoleSize) {
+                            consoleBuilder.delete(0, consoleBuilder.length - maxConsoleSize)
+                        }
+                        consoleBuilder.toString()
+                    }
+                    _consoleText.value = snapshot
                 },
             )
             fanout = fo
