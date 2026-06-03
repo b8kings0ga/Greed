@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib.request import Request, urlopen
 
 
 HTML = """<!doctype html>
@@ -65,6 +66,12 @@ HTML = """<!doctype html>
         <thead><tr><th>class</th><th>conf</th><th>box</th></tr></thead>
         <tbody id="detections"></tbody>
       </table>
+      <h2>Speech</h2>
+      <div id="speechMeta" class="muted">loading</div>
+      <table>
+        <thead><tr><th>time</th><th>text</th></tr></thead>
+        <tbody id="transcript"></tbody>
+      </table>
     </aside>
   </main>
   <script>
@@ -109,6 +116,29 @@ HTML = """<!doctype html>
         detections.insertAdjacentHTML("beforeend",
           `<tr><td>${d.name}</td><td>${d.confidence.toFixed(2)}</td><td>${d.box.map(v => Math.round(v)).join(", ")}</td></tr>`);
       }
+      await refreshTranscript();
+    }
+    async function refreshTranscript() {
+      const r = await fetch("/transcript.json?t=" + Date.now());
+      const data = await r.json();
+      document.getElementById("speechMeta").textContent =
+        data.enabled
+          ? `${data.source} · model ${data.model} · ${data.language} · audio ${data.audio_age_seconds.toFixed(1)}s · transcript ${data.transcript_age_seconds.toFixed(1)}s${data.error ? " · " + data.error : ""}`
+          : "disabled";
+      const transcript = document.getElementById("transcript");
+      transcript.innerHTML = "";
+      if ((data.segments || []).length === 0) {
+        transcript.insertAdjacentHTML("beforeend", `<tr><td colspan="2" class="muted">No speech yet</td></tr>`);
+      }
+      for (const row of data.segments || []) {
+        transcript.insertAdjacentHTML("beforeend",
+          `<tr><td class="muted">${new Date(row.time * 1000).toLocaleTimeString()}</td><td>${escapeHtml(row.text)}</td></tr>`);
+      }
+    }
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, ch => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[ch]));
     }
     async function applyClasses() {
       const raw = document.getElementById("classInput").value;
@@ -169,6 +199,15 @@ class DetectionState:
     detection_time: float = 0.0
     detection_capture_time: float = 0.0
     error: str | None = None
+    stt_enabled: bool = False
+    audio_source: str = ""
+    stt_model: str = ""
+    stt_language: str = "auto"
+    stt_min_rms: float = 0.05
+    stt_segments: list[dict[str, Any]] = field(default_factory=list)
+    stt_audio_time: float = 0.0
+    stt_time: float = 0.0
+    stt_error: str | None = None
 
 
 def draw_detections(frame: Any, detections: list[dict[str, Any]]) -> Any:
@@ -324,6 +363,81 @@ def worker(state: DetectionState, model_name: str, imgsz: int, confidence: float
             time.sleep(period - elapsed)
 
 
+def stt_worker(state: DetectionState, chunk_seconds: float) -> None:
+    from faster_whisper import WhisperModel
+
+    model = WhisperModel(state.stt_model, device="auto", compute_type="int8")
+    bytes_per_second = 16_000 * 2
+    target_bytes = int(bytes_per_second * chunk_seconds)
+    min_bytes = int(bytes_per_second * 1.0)
+
+    while True:
+        try:
+            request = Request(state.audio_source, headers={"User-Agent": "GreedSenseSTT/1.0"})
+            with urlopen(request, timeout=10) as response:
+                wav_header = response.read(44)
+                if len(wav_header) < 44 or wav_header[:4] != b"RIFF":
+                    raise RuntimeError("audio source did not return WAV")
+                pending = bytearray()
+                with state.lock:
+                    state.stt_error = None
+                while True:
+                    chunk = response.read(4096)
+                    if not chunk:
+                        raise RuntimeError("audio stream ended")
+                    pending.extend(chunk)
+                    with state.lock:
+                        state.stt_audio_time = time.time()
+                        state.stt_error = None
+                    if len(pending) >= target_bytes:
+                        pcm = bytes(pending[:target_bytes])
+                        del pending[:target_bytes]
+                        transcribe_pcm16_chunk(state, model, pcm, min_bytes)
+        except Exception as e:
+            with state.lock:
+                state.stt_error = str(e)
+            time.sleep(1.5)
+
+
+def transcribe_pcm16_chunk(state: DetectionState, model: Any, pcm: bytes, min_bytes: int) -> None:
+    if len(pcm) < min_bytes:
+        return
+    import numpy as np
+
+    audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+    rms = float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0
+    if rms < state.stt_min_rms:
+        return
+
+    language = None if state.stt_language == "auto" else state.stt_language
+    segments, _info = model.transcribe(
+        audio,
+        language=language,
+        beam_size=1,
+        vad_filter=True,
+        temperature=0.0,
+        no_speech_threshold=0.55,
+        log_prob_threshold=-1.0,
+        condition_on_previous_text=False,
+    )
+    accepted = [
+        segment.text.strip()
+        for segment in segments
+        if segment.text.strip()
+        and getattr(segment, "no_speech_prob", 0.0) < 0.75
+        and getattr(segment, "avg_logprob", 0.0) > -1.2
+    ]
+    text = " ".join(accepted).strip()
+    if not text:
+        return
+    now = time.time()
+    with state.lock:
+        state.stt_segments.append({"time": now, "text": text, "rms": rms})
+        state.stt_segments = state.stt_segments[-100:]
+        state.stt_time = now
+        state.stt_error = None
+
+
 class Handler(BaseHTTPRequestHandler):
     state: DetectionState
 
@@ -353,6 +467,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:
+        if self.path.startswith("/transcript.json"):
+            self.write_json(self.transcript_snapshot())
+            return
         if self.path.startswith("/detections.json"):
             self.write_json(self.snapshot())
             return
@@ -395,6 +512,21 @@ class Handler(BaseHTTPRequestHandler):
                 "error": self.state.error,
             }
 
+    def transcript_snapshot(self) -> dict[str, Any]:
+        with self.state.lock:
+            now = time.time()
+            return {
+                "enabled": self.state.stt_enabled,
+                "source": self.state.audio_source,
+                "model": self.state.stt_model,
+                "language": self.state.stt_language,
+                "min_rms": self.state.stt_min_rms,
+                "segments": list(self.state.stt_segments[-20:]),
+                "audio_age_seconds": max(0.0, now - self.state.stt_audio_time) if self.state.stt_audio_time else 9999.0,
+                "transcript_age_seconds": max(0.0, now - self.state.stt_time) if self.state.stt_time else 9999.0,
+                "error": self.state.stt_error,
+            }
+
     def write_json(self, payload: dict[str, Any]) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(200)
@@ -431,6 +563,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--imgsz", type=int, default=640)
     parser.add_argument("--conf", type=float, default=0.25)
+    parser.add_argument("--stt", action="store_true", help="Transcribe the Podroid microphone WAV stream locally.")
+    parser.add_argument("--audio-source", default="http://192.168.1.33:18082/stream.wav")
+    parser.add_argument("--stt-model", default="base", help="faster-whisper model name, for example tiny, base, small.")
+    parser.add_argument("--stt-language", default="auto", help="Language code such as en/zh, or auto.")
+    parser.add_argument("--stt-chunk-seconds", type=float, default=4.0)
+    parser.add_argument("--stt-min-rms", type=float, default=0.05, help="Skip low-energy audio chunks below this RMS.")
     return parser.parse_args()
 
 
@@ -442,15 +580,25 @@ def main() -> None:
         fps_target=args.fps,
         mode="yolo-world" if args.world else "yolo",
         target_classes=target_classes if args.world else [],
+        stt_enabled=args.stt,
+        audio_source=args.audio_source,
+        stt_model=args.stt_model,
+        stt_language=args.stt_language,
+        stt_min_rms=args.stt_min_rms,
     )
     Handler.state = state
     threading.Thread(target=capture_worker, args=(state,), daemon=True).start()
     threading.Thread(target=worker, args=(state, args.model, args.imgsz, args.conf, args.world), daemon=True).start()
+    if args.stt:
+        threading.Thread(target=stt_worker, args=(state, args.stt_chunk_seconds), daemon=True).start()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"YOLO viewer: http://{args.host}:{args.port}")
     print(f"Source: {args.source}")
     if args.world:
         print(f"YOLO-World classes: {', '.join(target_classes)}")
+    if args.stt:
+        print(f"STT source: {args.audio_source}")
+        print(f"STT model: {args.stt_model} language={args.stt_language} min_rms={args.stt_min_rms}")
     server.serve_forever()
 
 

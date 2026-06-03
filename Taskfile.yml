@@ -15,6 +15,10 @@ vars:
   YOLO_CONF: '{{default "0.25" .YOLO_CONF}}'
   YOLO_WORLD_CONF: '{{default "0.01" .YOLO_WORLD_CONF}}'
   YOLO_CLASSES: '{{default "person,face,hand,phone,laptop,keyboard,mouse,monitor,bottle,cup,book,backpack,chair,table,door,window" .YOLO_CLASSES}}'
+  STT_SOURCE: '{{default "http://192.168.1.33:18082/stream.wav" .STT_SOURCE}}'
+  STT_MODEL: '{{default "base" .STT_MODEL}}'
+  STT_LANGUAGE: '{{default "auto" .STT_LANGUAGE}}'
+  STT_MIN_RMS: '{{default "0.05" .STT_MIN_RMS}}'
   VEGVISIR_REGION: '{{default "brgru" .VEGVISIR_REGION}}'
   VEGVISIR_NOMAD_RPC: >-
     [200:fd04:ce3c:3f3f:644:e82d:67a0:68a0]:14647
@@ -45,7 +49,7 @@ tasks:
         set -eu
         python3 -m venv "{{.YOLO_VENV}}"
         "{{.YOLO_VENV}}/bin/python" -m pip install --upgrade pip
-        "{{.YOLO_VENV}}/bin/python" -m pip install ultralytics opencv-python flask pillow \
+        "{{.YOLO_VENV}}/bin/python" -m pip install ultralytics opencv-python flask pillow faster-whisper numpy \
           "git+https://github.com/ultralytics/CLIP.git"
 
   yolo:stream:
@@ -74,6 +78,23 @@ tasks:
           --world \
           --model yolov8s-worldv2.pt \
           --classes "{{.YOLO_CLASSES}}"
+
+  sense:listen:
+    desc: Run the local vision page and transcribe the Podroid microphone stream.
+    cmds:
+      - |
+        set -eu
+        test -x "{{.YOLO_VENV}}/bin/python" || task yolo:install
+        "{{.YOLO_VENV}}/bin/python" tools/yolo_stream_viewer.py \
+          --source "{{.YOLO_SOURCE}}" \
+          --port "{{.YOLO_PORT}}" \
+          --fps "{{.YOLO_FPS}}" \
+          --conf "{{.YOLO_CONF}}" \
+          --stt \
+          --audio-source "{{.STT_SOURCE}}" \
+          --stt-model "{{.STT_MODEL}}" \
+          --stt-language "{{.STT_LANGUAGE}}" \
+          --stt-min-rms "{{.STT_MIN_RMS}}"
 
   vegvisir:update:
     desc: Update Podroid Ratatoskr join targets from the local mim tree.
