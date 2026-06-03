@@ -158,7 +158,7 @@ class LocationSenseManager @Inject constructor(
             connectTimeout = GEOCODER_TIMEOUT_MS.toInt()
             readTimeout = GEOCODER_TIMEOUT_MS.toInt()
             setRequestProperty("Accept", "application/json")
-            setRequestProperty("Accept-Language", "zh,en;q=0.8")
+            setRequestProperty("Accept-Language", "en")
             setRequestProperty("User-Agent", NOMINATIM_USER_AGENT)
         }
         try {
