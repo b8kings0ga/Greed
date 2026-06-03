@@ -50,6 +50,7 @@ class PodroidService : Service() {
     @Inject lateinit var usbPassthroughManager: UsbPassthroughManager
     @Inject lateinit var notificationPoster: com.excp.podroid.engine.hostbridge.AndroidNotificationPoster
     @Inject lateinit var headlessModeManager: com.excp.podroid.engine.hostbridge.HeadlessModeManager
+    @Inject lateinit var cameraStreamManager: com.excp.podroid.engine.hostbridge.camera.CameraStreamManager
     private var hostRequestServer: com.excp.podroid.engine.hostbridge.HostRequestServer? = null
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -134,6 +135,7 @@ class PodroidService : Service() {
         super.onDestroy()
         notificationJob?.cancel()
         hostRequestServer?.stop()
+        cameraStreamManager.stop()
         usbPassthroughManager.stop()
         releaseWakeLock()
         serviceScope.cancel()
@@ -277,6 +279,7 @@ class PodroidService : Service() {
             openUrl = { handleOpenUrl(it) },
             power = { handlePowerRequest(it) },
             setHeadless = { handleHeadlessRequest(it) },
+            camera = { handleCameraRequest(it) },
         )
         return com.excp.podroid.engine.hostbridge.HostRequestServer(
             openTransport = { engine.openHostTransport() },
@@ -311,6 +314,7 @@ class PodroidService : Service() {
                     // we MUST block here until extraction has fully completed or
                     // the VM could launch against a partial/missing file.
                     (application as? PodroidApplication)?.awaitAssetsReady()
+                    cameraStreamManager.ensureStartedIfPermitted()
 
                     val rules = portForwardRepository.getRulesSnapshot().toMutableList()
                     val sshEnabled = settingsRepository.getSshEnabledSnapshot()
@@ -472,6 +476,14 @@ class PodroidService : Service() {
         "off" -> { headlessModeManager.setActive(false); com.excp.podroid.engine.hostbridge.HostProtocol.ok() }
         "status" -> com.excp.podroid.engine.hostbridge.HostProtocol.ok(if (headlessModeManager.active.value) "on" else "off")
         else -> com.excp.podroid.engine.hostbridge.HostProtocol.err("usage: on|off|status")
+    }
+
+    private fun handleCameraRequest(action: String): String = when (action) {
+        "start" -> cameraStreamManager.start()
+        "stop" -> cameraStreamManager.stop()
+        "status" -> cameraStreamManager.status()
+        "url" -> cameraStreamManager.url()
+        else -> com.excp.podroid.engine.hostbridge.HostProtocol.err("usage: start|stop|status|url")
     }
 
     // Reply returned now; the stop/restart is posted to the main looper so the

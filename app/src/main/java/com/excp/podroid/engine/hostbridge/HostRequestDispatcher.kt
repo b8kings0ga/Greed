@@ -18,6 +18,7 @@ class HostRequestDispatcher(
     private val openUrl: suspend (String) -> String,
     private val power: suspend (String) -> String,
     private val setHeadless: suspend (String) -> String,
+    private val camera: suspend (String) -> String,
 ) {
     private val validProtocols = setOf("tcp", "udp")
 
@@ -32,6 +33,7 @@ class HostRequestDispatcher(
                 "OPEN" -> handleOpen(parts)
                 "POWER" -> handlePower(parts)
                 "HEADLESS" -> handleHeadless(parts)
+                "CAMERA" -> handleCamera(parts)
                 "PING" -> "PONG"
                 else -> HostProtocol.err("bad request")
             }
@@ -101,5 +103,12 @@ class HostRequestDispatcher(
         if (p.size != 2) return HostProtocol.err("bad request")
         if (p[1] !in setOf("on", "off", "status")) return HostProtocol.err("usage: on|off|status")
         return setHeadless(p[1])
+    }
+
+    // CAMERA <start|stop|status|url>
+    private suspend fun handleCamera(p: List<String>): String {
+        if (p.size != 2) return HostProtocol.err("bad request")
+        if (p[1] !in setOf("start", "stop", "status", "url")) return HostProtocol.err("usage: start|stop|status|url")
+        return camera(p[1])
     }
 }

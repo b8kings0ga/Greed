@@ -129,6 +129,8 @@ ln -sf podroid-hostd "$ROOTFS/usr/local/bin/podroid-open"
 ln -sf podroid-hostd "$ROOTFS/usr/local/bin/podroid-power"
 ln -sf podroid-hostd "$ROOTFS/usr/local/bin/podroid-headless"
 ln -sf podroid-hostd "$ROOTFS/usr/local/bin/podroid-server"
+ln -sf podroid-hostd "$ROOTFS/usr/local/bin/podroid-camera"
+ln -sf ../local/bin/podroid-hostd "$ROOTFS/usr/bin/podroid-camera"
 chmod +x "$ROOTFS/usr/local/bin/podroid-"*
 mkdir -p "$ROOTFS/etc/conf.d"
 cp /work/files/etc/conf.d/podroid "$ROOTFS/etc/conf.d/"

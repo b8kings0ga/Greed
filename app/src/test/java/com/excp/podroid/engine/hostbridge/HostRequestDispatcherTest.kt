@@ -35,6 +35,7 @@ private fun dispatcher(
     openUrl: suspend (String) -> String = { HostProtocol.ok() },
     power: suspend (String) -> String = { HostProtocol.ok() },
     setHeadless: suspend (String) -> String = { HostProtocol.ok() },
+    camera: suspend (String) -> String = { HostProtocol.ok() },
 ) = HostRequestDispatcher(
     notifications = poster,
     addForward = { r -> rules.removeAll { it.hostPort == r.hostPort && it.protocol == r.protocol }; rules.add(r) },
@@ -43,6 +44,7 @@ private fun dispatcher(
     openUrl = openUrl,
     power = power,
     setHeadless = setHeadless,
+    camera = camera,
 )
 
 class HostRequestDispatcherTest {
@@ -156,5 +158,13 @@ class HostRequestDispatcherTest {
         assertEquals("OK", d.handle("HEADLESS on"))
         assertEquals("on", seen)
         assertTrue(d.handle("HEADLESS sideways").startsWith("ERR "))
+    }
+
+    @Test fun cameraValidatesActionAndDelegates() = runBlocking {
+        var seen: String? = null
+        val d = dispatcher(camera = { seen = it; HostProtocol.ok(HostProtocol.enc("url")) })
+        assertEquals("OK ${HostProtocol.enc("url")}", d.handle("CAMERA url"))
+        assertEquals("url", seen)
+        assertTrue(d.handle("CAMERA sideways").startsWith("ERR "))
     }
 }

@@ -1,27 +1,37 @@
 package com.excp.podroid
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Bundle
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.excp.podroid.data.repository.LanguageManager
+import com.excp.podroid.engine.hostbridge.camera.CameraStreamManager
 import com.excp.podroid.ui.navigation.NavGraphViewModel
 import com.excp.podroid.ui.navigation.PodroidNavGraph
 import com.excp.podroid.ui.theme.PodroidTheme
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    @Inject lateinit var cameraStreamManager: CameraStreamManager
 
     override fun attachBaseContext(newBase: Context?) {
         val base = newBase ?: return super.attachBaseContext(null)
@@ -38,6 +48,21 @@ class MainActivity : ComponentActivity() {
             val navVm: NavGraphViewModel = hiltViewModel()
             val darkTheme by navVm.darkTheme.collectAsStateWithLifecycle(initialValue = null)
             val dynamicColor by navVm.dynamicColorEnabled.collectAsStateWithLifecycle(initialValue = false)
+            val cameraPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission(),
+            ) { granted ->
+                if (granted) cameraStreamManager.ensureStartedIfPermitted()
+            }
+
+            LaunchedEffect(Unit) {
+                if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.CAMERA)
+                    == PackageManager.PERMISSION_GRANTED
+                ) {
+                    cameraStreamManager.ensureStartedIfPermitted()
+                } else {
+                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                }
+            }
 
             PodroidTheme(darkTheme = darkTheme, dynamicColor = dynamicColor) {
                 Surface(

@@ -21,6 +21,9 @@
     <!-- Keep CPU awake while VM is running -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Camera shim exposed to the guest through the host bridge. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
     <!-- Terminal bell haptic feedback (used by Termux terminal view) -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
@@ -41,6 +44,7 @@
 
     <!-- Large heap for QEMU memory allocation -->
     <uses-feature android:name="android.hardware.opengles.aep" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <!--
         USB host mode — needed to pass external USB devices into the VM. Per-device
