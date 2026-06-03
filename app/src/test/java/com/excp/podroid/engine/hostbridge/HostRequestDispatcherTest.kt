@@ -165,6 +165,11 @@ class HostRequestDispatcherTest {
         val d = dispatcher(camera = { seen = it; HostProtocol.ok(HostProtocol.enc("url")) })
         assertEquals("OK ${HostProtocol.enc("url")}", d.handle("CAMERA url"))
         assertEquals("url", seen)
+        assertEquals("OK ${HostProtocol.enc("url")}", d.handle("CAMERA select 0"))
+        assertEquals("select 0", seen)
+        assertEquals("OK ${HostProtocol.enc("url")}", d.handle("CAMERA list"))
+        assertEquals("list", seen)
         assertTrue(d.handle("CAMERA sideways").startsWith("ERR "))
+        assertTrue(d.handle("CAMERA select").startsWith("ERR "))
     }
 }

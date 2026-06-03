@@ -114,6 +114,7 @@ mkdir -p "$ROOTFS/usr/local/bin"
 cp /work/files/usr/local/bin/podroid-resize "$ROOTFS/usr/local/bin/"
 cp /work/files/usr/local/bin/podroid-login  "$ROOTFS/usr/local/bin/"
 cp /work/files/usr/local/bin/podroid-getty  "$ROOTFS/usr/local/bin/"
+cp /work/files/usr/local/bin/podroid-camera-gallery "$ROOTFS/usr/local/bin/"
 # podroid-vsock-agent is COPY'd in from the vsock-builder Docker stage. Make
 # sure it's executable (cross-arch COPY can lose the mode bit on some buildkit
 # versions).
@@ -131,6 +132,7 @@ ln -sf podroid-hostd "$ROOTFS/usr/local/bin/podroid-headless"
 ln -sf podroid-hostd "$ROOTFS/usr/local/bin/podroid-server"
 ln -sf podroid-hostd "$ROOTFS/usr/local/bin/podroid-camera"
 ln -sf ../local/bin/podroid-hostd "$ROOTFS/usr/bin/podroid-camera"
+ln -sf ../local/bin/podroid-camera-gallery "$ROOTFS/usr/bin/podroid-camera-gallery"
 chmod +x "$ROOTFS/usr/local/bin/podroid-"*
 mkdir -p "$ROOTFS/etc/conf.d"
 cp /work/files/etc/conf.d/podroid "$ROOTFS/etc/conf.d/"

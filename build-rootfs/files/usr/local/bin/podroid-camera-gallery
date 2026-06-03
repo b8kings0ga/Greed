@@ -1,0 +1,71 @@
+#!/bin/sh
+set -eu
+
+OUT="${1:-/mnt/persist/ratatoskr/camera-gallery.html}"
+LIST="$(podroid-camera list)"
+STATUS="$(podroid-camera status 2>/dev/null || true)"
+URL="$(podroid-camera url 2>/dev/null || printf '%s\n' 'http://10.0.2.2:18080/stream.mjpg')"
+
+mkdir -p "$(dirname "$OUT")"
+
+ids="$(printf '%s\n' "$LIST" | grep -o '"id":"[^"]*"' | cut -d '"' -f 4 || true)"
+
+{
+cat <<EOF
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Podroid Cameras</title>
+  <style>
+    body { margin: 0; font: 14px system-ui, sans-serif; background: #101214; color: #f3f5f7; }
+    header { padding: 16px; border-bottom: 1px solid #2a2f35; }
+    main { display: grid; grid-template-columns: minmax(280px, 1fr) 340px; gap: 16px; padding: 16px; }
+    img { width: 100%; background: #000; border: 1px solid #2a2f35; }
+    pre, code { white-space: pre-wrap; word-break: break-word; }
+    .panel { border: 1px solid #2a2f35; padding: 12px; background: #171a1e; }
+    .camera { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid #2a2f35; }
+    .muted { color: #aab2bd; }
+    @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Podroid Cameras</h1>
+    <div class="muted">Live stream: <code>$URL</code></div>
+  </header>
+  <main>
+    <section class="panel">
+      <h2>Current Stream</h2>
+      <img src="$URL" alt="Current Android camera stream">
+      <p class="muted">Switch lens from the VM, then refresh this page.</p>
+    </section>
+    <aside class="panel">
+      <h2>Detected Lenses</h2>
+EOF
+
+if [ -z "$ids" ]; then
+    printf '      <p>No camera ids reported.</p>\n'
+else
+    for id in $ids; do
+        printf '      <div class="camera">\n'
+        printf '        <h3>Camera %s</h3>\n' "$id"
+        printf '        <code>podroid-camera select %s && podroid-camera start</code>\n' "$id"
+        printf '      </div>\n'
+    done
+fi
+
+cat <<EOF
+      <h2>Raw Camera List</h2>
+      <pre>$LIST</pre>
+      <h2>Status</h2>
+      <pre>$STATUS</pre>
+    </aside>
+  </main>
+</body>
+</html>
+EOF
+} > "$OUT"
+
+printf '%s\n' "$OUT"

@@ -296,14 +296,20 @@ static int cli_headless(int argc, char **argv) {
 }
 
 static int cli_camera(int argc, char **argv) {
-    if (argc < 2) { fprintf(stderr, "usage: podroid-camera <start|stop|status|url>\n"); return 2; }
-    char req[64];
-    snprintf(req, sizeof(req), "CAMERA %s", argv[1]);
+    if (argc < 2) { fprintf(stderr, "usage: podroid-camera <start|stop|status|url|list|select ID>\n"); return 2; }
+    char req[128];
+    if (strcmp(argv[1], "select") == 0) {
+        if (argc != 3) { fprintf(stderr, "usage: podroid-camera select ID\n"); return 2; }
+        snprintf(req, sizeof(req), "CAMERA select %s", argv[2]);
+    } else {
+        snprintf(req, sizeof(req), "CAMERA %s", argv[1]);
+    }
     char resp[8192];
     if (cli_roundtrip(req, resp, sizeof(resp)) < 0) {
         fprintf(stderr, "podroid: host bridge not available\n"); return 1;
     }
-    return cli_report(resp, strcmp(argv[1], "status") == 0 || strcmp(argv[1], "url") == 0);
+    return cli_report(resp, strcmp(argv[1], "status") == 0 || strcmp(argv[1], "url") == 0 ||
+        strcmp(argv[1], "list") == 0 || strcmp(argv[1], "select") == 0);
 }
 
 /* On QEMU the host channel is /dev/hvc2, a virtio-console TTY that defaults to

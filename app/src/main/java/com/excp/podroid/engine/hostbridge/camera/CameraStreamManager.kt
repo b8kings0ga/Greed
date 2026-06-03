@@ -10,10 +10,12 @@ import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
+import android.hardware.camera2.params.StreamConfigurationMap
 import android.media.Image
 import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
+import android.util.Size
 import androidx.core.content.ContextCompat
 import com.excp.podroid.engine.hostbridge.HostProtocol
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -36,6 +38,7 @@ class CameraStreamManager @Inject constructor(
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var running = false
+    private var selectedCameraId: String? = null
 
     fun start(): String = synchronized(lock) {
         if (!hasCameraPermission()) {
@@ -56,6 +59,23 @@ class CameraStreamManager @Inject constructor(
     }
 
     fun status(): String = synchronized(lock) {
+        HostProtocol.ok(HostProtocol.enc(statusJson()))
+    }
+
+    fun list(): String = synchronized(lock) {
+        HostProtocol.ok(HostProtocol.enc(cameraListJson()))
+    }
+
+    fun select(cameraId: String): String = synchronized(lock) {
+        val manager = context.getSystemService(CameraManager::class.java)
+        if (cameraId !in manager.cameraIdList) return HostProtocol.err("unknown camera id")
+        selectedCameraId = cameraId
+        if (running) {
+            stopLocked()
+            running = true
+            httpServer.start()
+            openCameraLocked()
+        }
         HostProtocol.ok(HostProtocol.enc(statusJson()))
     }
 
@@ -88,12 +108,13 @@ class CameraStreamManager @Inject constructor(
         }, handler)
 
         val manager = context.getSystemService(CameraManager::class.java)
-        val cameraId = selectBackCamera(manager)
+        val cameraId = selectedCameraId?.takeIf { it in manager.cameraIdList } ?: selectBackCamera(manager)
         if (cameraId == null) {
             lastError = "no back camera"
             stopLocked()
             return
         }
+        selectedCameraId = cameraId
 
         runCatching {
             manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
@@ -179,6 +200,7 @@ class CameraStreamManager @Inject constructor(
             append(",\"frameReady\":").append(frameReady)
             append(",\"url\":\"").append(httpServer.urlForGuest).append('"')
             append(",\"localUrl\":\"").append(httpServer.localUrl).append('"')
+            append(",\"cameraId\":\"").append(jsonEscape(selectedCameraId ?: "")).append('"')
             append(",\"width\":").append(WIDTH)
             append(",\"height\":").append(HEIGHT)
             if (error != null) append(",\"error\":\"").append(jsonEscape(error)).append('"')
@@ -191,6 +213,48 @@ class CameraStreamManager @Inject constructor(
             manager.getCameraCharacteristics(id)
                 .get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
         } ?: manager.cameraIdList.firstOrNull()
+
+    private fun cameraListJson(): String {
+        val manager = context.getSystemService(CameraManager::class.java)
+        return manager.cameraIdList.joinToString(prefix = "[", postfix = "]") { id ->
+            val chars = manager.getCameraCharacteristics(id)
+            val facing = when (chars.get(CameraCharacteristics.LENS_FACING)) {
+                CameraCharacteristics.LENS_FACING_FRONT -> "front"
+                CameraCharacteristics.LENS_FACING_BACK -> "back"
+                CameraCharacteristics.LENS_FACING_EXTERNAL -> "external"
+                else -> "unknown"
+            }
+            val focalLengths = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                ?.joinToString(prefix = "[", postfix = "]") { trimFloat(it) } ?: "[]"
+            val physicalIds = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                chars.physicalCameraIds.joinToString(prefix = "[", postfix = "]") { "\"${jsonEscape(it)}\"" }
+            } else {
+                "[]"
+            }
+            val sizes = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                ?.previewSizesJson() ?: "[]"
+            buildString {
+                append('{')
+                append("\"id\":\"").append(jsonEscape(id)).append('"')
+                append(",\"facing\":\"").append(facing).append('"')
+                append(",\"selected\":").append(id == selectedCameraId)
+                append(",\"focalLengths\":").append(focalLengths)
+                append(",\"physicalCameraIds\":").append(physicalIds)
+                append(",\"previewSizes\":").append(sizes)
+                append('}')
+            }
+        }
+    }
+
+    private fun StreamConfigurationMap.previewSizesJson(): String =
+        getOutputSizes(ImageFormat.YUV_420_888)
+            ?.sortedWith(compareBy<Size> { it.width * it.height }.thenBy { it.width })
+            ?.takeLast(8)
+            ?.joinToString(prefix = "[", postfix = "]") { "{\"width\":${it.width},\"height\":${it.height}}" }
+            ?: "[]"
+
+    private fun trimFloat(value: Float): String =
+        if (value % 1f == 0f) value.toInt().toString() else value.toString()
 
     private fun imageToJpeg(image: Image): ByteArray {
         val nv21 = yuv420ToNv21(image)

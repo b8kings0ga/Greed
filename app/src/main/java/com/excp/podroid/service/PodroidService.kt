@@ -292,7 +292,7 @@ class PodroidService : Service() {
     private suspend fun observeStateForHostBridge() {
         engine.state.collect { state ->
             when (state) {
-                is VmState.Running -> ensureHostBridge().start()
+                is VmState.Starting, is VmState.Running -> ensureHostBridge().start()
                 is VmState.Stopped, is VmState.Idle, is VmState.Error -> {
                     hostRequestServer?.stop()
                     // Drop server mode so the black overlay doesn't linger over a
@@ -483,7 +483,15 @@ class PodroidService : Service() {
         "stop" -> cameraStreamManager.stop()
         "status" -> cameraStreamManager.status()
         "url" -> cameraStreamManager.url()
-        else -> com.excp.podroid.engine.hostbridge.HostProtocol.err("usage: start|stop|status|url")
+        "list" -> cameraStreamManager.list()
+        else -> {
+            val parts = action.split(" ", limit = 2)
+            if (parts.size == 2 && parts[0] == "select") {
+                cameraStreamManager.select(parts[1])
+            } else {
+                com.excp.podroid.engine.hostbridge.HostProtocol.err("usage: start|stop|status|url|list|select")
+            }
+        }
     }
 
     // Reply returned now; the stop/restart is posted to the main looper so the
