@@ -228,8 +228,9 @@ SPEECH_HTML = """<!doctype html>
         document.getElementById("meta").textContent += ` · rms ${Number(data.latest_rms || 0).toFixed(3)} · skipped ${data.skipped_chunks || 0}`;
       }
       const button = document.getElementById("recordButton");
-      button.textContent = data.recording ? "Stop" : "Record";
+      button.textContent = data.recording ? "Recording..." : "Record";
       button.className = data.recording ? "recording" : "";
+      button.disabled = data.recording;
       document.getElementById("recordState").textContent = data.recording ? "recording" : "idle";
       const rows = document.getElementById("rows");
       rows.innerHTML = "";
@@ -491,7 +492,6 @@ def stt_worker(state: DetectionState, chunk_seconds: float) -> None:
     bytes_per_second = 16_000 * 2
     target_bytes = int(bytes_per_second * chunk_seconds)
     min_bytes = int(bytes_per_second * 1.0)
-    step_bytes = max(min_bytes, target_bytes // 2)
 
     while True:
         with state.lock:
@@ -502,13 +502,14 @@ def stt_worker(state: DetectionState, chunk_seconds: float) -> None:
             else:
                 buffer_len = len(state.stt_audio_buffer)
                 new_bytes = buffer_len - state.stt_last_offset
-                if buffer_len < min_bytes or new_bytes < step_bytes:
+                if buffer_len < min_bytes or new_bytes < target_bytes:
                     pcm = None
                 else:
-                    end = buffer_len
-                    start = max(0, end - target_bytes)
+                    start = state.stt_last_offset
+                    end = min(buffer_len, start + target_bytes)
                     pcm = bytes(state.stt_audio_buffer[start:end])
-                    state.stt_last_offset = max(0, buffer_len - target_bytes // 2)
+                    state.stt_recording = False
+                    state.stt_last_offset = buffer_len
                     state.stt_processed_seq = state.stt_audio_seq
         if pcm:
             transcribe_pcm16_chunk(state, model, pcm, min_bytes)
@@ -600,7 +601,7 @@ class Handler(BaseHTTPRequestHandler):
     def toggle_recording(self) -> dict[str, Any]:
         with self.state.lock:
             if self.state.stt_recording:
-                self.state.stt_recording = False
+                return {"ok": True, "recording": True}
             else:
                 self.state.stt_recording = True
                 self.state.stt_record_started = time.time()
