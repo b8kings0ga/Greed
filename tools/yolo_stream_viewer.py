@@ -196,6 +196,9 @@ SPEECH_HTML = """<!doctype html>
     .text { font-size: 20px; line-height: 1.35; }
     .translation { color: #38d399; font-size: 18px; line-height: 1.35; }
     .empty { color: #94a3b8; padding: 24px; text-align: center; border: 1px solid #29313d; background: #151922; }
+    .controls { max-width: 980px; margin: 16px auto 0; padding: 0 16px; display: flex; gap: 10px; align-items: center; }
+    button { background: #38d399; color: #07110d; border: 0; padding: 10px 16px; font-weight: 800; cursor: pointer; }
+    button.recording { background: #fb7185; color: #21060b; }
   </style>
 </head>
 <body>
@@ -203,6 +206,10 @@ SPEECH_HTML = """<!doctype html>
     <strong>Podroid Speech</strong>
     <span class="meta" id="meta">loading</span>
   </header>
+  <section class="controls">
+    <button id="recordButton" type="button">Record</button>
+    <span class="meta" id="recordState">idle</span>
+  </section>
   <main id="rows"></main>
   <script>
     function escapeHtml(value) {
@@ -220,6 +227,10 @@ SPEECH_HTML = """<!doctype html>
       if (data.enabled) {
         document.getElementById("meta").textContent += ` · rms ${Number(data.latest_rms || 0).toFixed(3)} · skipped ${data.skipped_chunks || 0}`;
       }
+      const button = document.getElementById("recordButton");
+      button.textContent = data.recording ? "Stop" : "Record";
+      button.className = data.recording ? "recording" : "";
+      document.getElementById("recordState").textContent = data.recording ? "recording" : "idle";
       const rows = document.getElementById("rows");
       rows.innerHTML = "";
       const segments = data.segments || [];
@@ -236,7 +247,13 @@ SPEECH_HTML = """<!doctype html>
            </section>`);
       }
     }
+    async function toggleRecord() {
+      const r = await fetch("/record", {method: "POST"});
+      await r.json();
+      await refresh();
+    }
     refresh();
+    document.getElementById("recordButton").addEventListener("click", toggleRecord);
     setInterval(refresh, 700);
   </script>
 </body>
@@ -267,6 +284,8 @@ class DetectionState:
     stt_language: str = "auto"
     stt_min_rms: float = 0.025
     stt_translate: bool = True
+    stt_recording: bool = False
+    stt_record_started: float = 0.0
     stt_audio_buffer: bytearray = field(default_factory=bytearray)
     stt_audio_seq: int = 0
     stt_processed_seq: int = 0
@@ -476,16 +495,21 @@ def stt_worker(state: DetectionState, chunk_seconds: float) -> None:
 
     while True:
         with state.lock:
-            buffer_len = len(state.stt_audio_buffer)
-            new_bytes = buffer_len - state.stt_last_offset
-            if buffer_len < min_bytes or new_bytes < step_bytes:
+            if not state.stt_recording:
                 pcm = None
-            else:
-                end = buffer_len
-                start = max(0, end - target_bytes)
-                pcm = bytes(state.stt_audio_buffer[start:end])
-                state.stt_last_offset = max(0, buffer_len - target_bytes // 2)
+                state.stt_last_offset = len(state.stt_audio_buffer)
                 state.stt_processed_seq = state.stt_audio_seq
+            else:
+                buffer_len = len(state.stt_audio_buffer)
+                new_bytes = buffer_len - state.stt_last_offset
+                if buffer_len < min_bytes or new_bytes < step_bytes:
+                    pcm = None
+                else:
+                    end = buffer_len
+                    start = max(0, end - target_bytes)
+                    pcm = bytes(state.stt_audio_buffer[start:end])
+                    state.stt_last_offset = max(0, buffer_len - target_bytes // 2)
+                    state.stt_processed_seq = state.stt_audio_seq
         if pcm:
             transcribe_pcm16_chunk(state, model, pcm, min_bytes)
         time.sleep(max(0.2, min(1.0, chunk_seconds / 4.0)))
@@ -546,6 +570,9 @@ class Handler(BaseHTTPRequestHandler):
     state: DetectionState
 
     def do_POST(self) -> None:
+        if self.path.startswith("/record"):
+            self.write_json(self.toggle_recording())
+            return
         if self.path.startswith("/classes"):
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length).decode("utf-8")
@@ -569,6 +596,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_response(404)
         self.end_headers()
+
+    def toggle_recording(self) -> dict[str, Any]:
+        with self.state.lock:
+            if self.state.stt_recording:
+                self.state.stt_recording = False
+            else:
+                self.state.stt_recording = True
+                self.state.stt_record_started = time.time()
+                self.state.stt_segments = []
+                self.state.stt_time = 0.0
+                self.state.stt_skipped_chunks = 0
+                self.state.stt_last_offset = len(self.state.stt_audio_buffer)
+                self.state.stt_processed_seq = self.state.stt_audio_seq
+            return {"ok": True, "recording": self.state.stt_recording}
 
     def do_GET(self) -> None:
         if self.path.startswith("/transcript.json"):
@@ -635,6 +676,9 @@ class Handler(BaseHTTPRequestHandler):
                 "latest_rms": self.state.stt_latest_rms,
                 "skipped_chunks": self.state.stt_skipped_chunks,
                 "translate": self.state.stt_translate,
+                "recording": self.state.stt_recording,
+                "record_seconds": max(0.0, now - self.state.stt_record_started)
+                if self.state.stt_recording and self.state.stt_record_started else 0.0,
                 "segments": list(self.state.stt_segments[-20:]),
                 "audio_age_seconds": max(0.0, now - self.state.stt_audio_time) if self.state.stt_audio_time else 9999.0,
                 "transcript_age_seconds": max(0.0, now - self.state.stt_time) if self.state.stt_time else 9999.0,
