@@ -52,6 +52,7 @@ class PodroidService : Service() {
     @Inject lateinit var headlessModeManager: com.excp.podroid.engine.hostbridge.HeadlessModeManager
     @Inject lateinit var cameraStreamManager: com.excp.podroid.engine.hostbridge.camera.CameraStreamManager
     @Inject lateinit var locationSenseManager: com.excp.podroid.engine.hostbridge.location.LocationSenseManager
+    @Inject lateinit var microphoneStreamManager: com.excp.podroid.engine.hostbridge.microphone.MicrophoneStreamManager
     private var hostRequestServer: com.excp.podroid.engine.hostbridge.HostRequestServer? = null
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -282,6 +283,7 @@ class PodroidService : Service() {
             setHeadless = { handleHeadlessRequest(it) },
             camera = { handleCameraRequest(it) },
             location = { handleLocationRequest(it) },
+            microphone = { handleMicrophoneRequest(it) },
         )
         return com.excp.podroid.engine.hostbridge.HostRequestServer(
             openTransport = { engine.openHostTransport() },
@@ -317,6 +319,7 @@ class PodroidService : Service() {
                     // the VM could launch against a partial/missing file.
                     (application as? PodroidApplication)?.awaitAssetsReady()
                     cameraStreamManager.ensureServerStarted()
+                    microphoneStreamManager.ensureServerStarted()
 
                     val rules = portForwardRepository.getRulesSnapshot().toMutableList()
                     val sshEnabled = settingsRepository.getSshEnabledSnapshot()
@@ -503,6 +506,21 @@ class PodroidService : Service() {
         "status" -> locationSenseManager.status()
         "address" -> locationSenseManager.address()
         else -> com.excp.podroid.engine.hostbridge.HostProtocol.err("usage: current|status|address")
+    }
+
+    private fun handleMicrophoneRequest(action: String): String = when (action) {
+        "start" -> microphoneStreamManager.start()
+        "stop" -> microphoneStreamManager.stop()
+        "status" -> microphoneStreamManager.status()
+        "url" -> microphoneStreamManager.url()
+        else -> {
+            val parts = action.split(" ", limit = 2)
+            if (parts.size == 2 && parts[0] == "lazy") {
+                microphoneStreamManager.lazy(parts[1])
+            } else {
+                com.excp.podroid.engine.hostbridge.HostProtocol.err("usage: start|stop|status|url|lazy")
+            }
+        }
     }
 
     // Reply returned now; the stop/restart is posted to the main looper so the

@@ -22,6 +22,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.excp.podroid.data.repository.LanguageManager
 import com.excp.podroid.engine.hostbridge.camera.CameraStreamManager
+import com.excp.podroid.engine.hostbridge.microphone.MicrophoneStreamManager
 import com.excp.podroid.ui.navigation.NavGraphViewModel
 import com.excp.podroid.ui.navigation.PodroidNavGraph
 import com.excp.podroid.ui.theme.PodroidTheme
@@ -32,6 +33,7 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
 
     @Inject lateinit var cameraStreamManager: CameraStreamManager
+    @Inject lateinit var microphoneStreamManager: MicrophoneStreamManager
 
     override fun attachBaseContext(newBase: Context?) {
         val base = newBase ?: return super.attachBaseContext(null)
@@ -52,6 +54,7 @@ class MainActivity : ComponentActivity() {
                 ActivityResultContracts.RequestMultiplePermissions(),
             ) { grants ->
                 if (grants[Manifest.permission.CAMERA] == true) cameraStreamManager.ensureServerStarted()
+                if (grants[Manifest.permission.RECORD_AUDIO] == true) microphoneStreamManager.ensureServerStarted()
             }
 
             LaunchedEffect(Unit) {
@@ -60,10 +63,16 @@ class MainActivity : ComponentActivity() {
                 ) {
                     cameraStreamManager.ensureServerStarted()
                 }
+                if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO)
+                    == PackageManager.PERMISSION_GRANTED
+                ) {
+                    microphoneStreamManager.ensureServerStarted()
+                }
                 val missing = listOf(
                     Manifest.permission.CAMERA,
                     Manifest.permission.ACCESS_FINE_LOCATION,
                     Manifest.permission.ACCESS_COARSE_LOCATION,
+                    Manifest.permission.RECORD_AUDIO,
                 ).filter {
                     ContextCompat.checkSelfPermission(this@MainActivity, it) != PackageManager.PERMISSION_GRANTED
                 }.toTypedArray()

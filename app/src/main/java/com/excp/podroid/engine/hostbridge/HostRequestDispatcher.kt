@@ -20,6 +20,7 @@ class HostRequestDispatcher(
     private val setHeadless: suspend (String) -> String,
     private val camera: suspend (String) -> String,
     private val location: suspend (String) -> String,
+    private val microphone: suspend (String) -> String,
 ) {
     private val validProtocols = setOf("tcp", "udp")
 
@@ -36,6 +37,7 @@ class HostRequestDispatcher(
                 "HEADLESS" -> handleHeadless(parts)
                 "CAMERA" -> handleCamera(parts)
                 "LOCATION" -> handleLocation(parts)
+                "MICROPHONE" -> handleMicrophone(parts)
                 "PING" -> "PONG"
                 else -> HostProtocol.err("bad request")
             }
@@ -126,5 +128,18 @@ class HostRequestDispatcher(
         if (p.size != 2) return HostProtocol.err("bad request")
         if (p[1] !in setOf("current", "status", "address")) return HostProtocol.err("usage: current|status|address")
         return location(p[1])
+    }
+
+    // MICROPHONE <start|stop|status|url|lazy> [on|off|status]
+    private suspend fun handleMicrophone(p: List<String>): String {
+        if (p.size !in 2..3) return HostProtocol.err("bad request")
+        if (p[1] !in setOf("start", "stop", "status", "url", "lazy")) {
+            return HostProtocol.err("usage: start|stop|status|url|lazy")
+        }
+        if (p[1] == "lazy" && (p.size != 3 || p[2] !in setOf("on", "off", "status"))) {
+            return HostProtocol.err("usage: lazy on|off|status")
+        }
+        if (p[1] != "lazy" && p.size != 2) return HostProtocol.err("bad request")
+        return microphone(p.drop(1).joinToString(" "))
     }
 }

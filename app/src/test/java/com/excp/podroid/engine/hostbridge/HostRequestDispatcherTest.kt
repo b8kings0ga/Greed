@@ -37,6 +37,7 @@ private fun dispatcher(
     setHeadless: suspend (String) -> String = { HostProtocol.ok() },
     camera: suspend (String) -> String = { HostProtocol.ok() },
     location: suspend (String) -> String = { HostProtocol.ok() },
+    microphone: suspend (String) -> String = { HostProtocol.ok() },
 ) = HostRequestDispatcher(
     notifications = poster,
     addForward = { r -> rules.removeAll { it.hostPort == r.hostPort && it.protocol == r.protocol }; rules.add(r) },
@@ -47,6 +48,7 @@ private fun dispatcher(
     setHeadless = setHeadless,
     camera = camera,
     location = location,
+    microphone = microphone,
 )
 
 class HostRequestDispatcherTest {
@@ -188,5 +190,17 @@ class HostRequestDispatcherTest {
         assertEquals("OK ${HostProtocol.enc("loc")}", d.handle("LOCATION address"))
         assertEquals("address", seen)
         assertTrue(d.handle("LOCATION watch").startsWith("ERR "))
+    }
+
+    @Test fun microphoneValidatesActionAndDelegates() = runBlocking {
+        var seen: String? = null
+        val d = dispatcher(microphone = { seen = it; HostProtocol.ok(HostProtocol.enc("mic")) })
+        assertEquals("OK ${HostProtocol.enc("mic")}", d.handle("MICROPHONE url"))
+        assertEquals("url", seen)
+        assertEquals("OK ${HostProtocol.enc("mic")}", d.handle("MICROPHONE lazy status"))
+        assertEquals("lazy status", seen)
+        assertTrue(d.handle("MICROPHONE sideways").startsWith("ERR "))
+        assertTrue(d.handle("MICROPHONE lazy sideways").startsWith("ERR "))
+        assertTrue(d.handle("MICROPHONE url extra").startsWith("ERR "))
     }
 }

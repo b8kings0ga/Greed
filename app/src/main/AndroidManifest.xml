@@ -28,12 +28,16 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
+    <!-- Microphone shim exposed to the guest through the host bridge. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <!-- Terminal bell haptic feedback (used by Termux terminal view) -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- Foreground service for QEMU process -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <!-- Required on Android 13+ to show the foreground service notification -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -49,6 +53,7 @@
     <!-- Large heap for QEMU memory allocation -->
     <uses-feature android:name="android.hardware.opengles.aep" android:required="false" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <!--
         USB host mode — needed to pass external USB devices into the VM. Per-device
@@ -115,7 +120,7 @@
         <service
             android:name=".service.PodroidService"
             android:exported="false"
-            android:foregroundServiceType="specialUse">
+            android:foregroundServiceType="specialUse|microphone">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Podman emulation via QEMU" />

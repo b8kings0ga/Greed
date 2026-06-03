@@ -11,7 +11,7 @@
  *   podroid-open      CLI: open a URL on Android (ACTION_VIEW).
  *   podroid-power     CLI: stop/restart the VM, or query status.
  *   podroid-headless  CLI (alias podroid-server): toggle server mode.
- *   sense            CLI: Android capability shim (`sense cam ...`, `sense loc ...`).
+ *   sense            CLI: Android capability shim (`sense cam ...`, `sense loc ...`, `sense mic ...`).
  *   podroid-camera   CLI: legacy camera alias.
  *
  * Daemon transport (one request line -> one response line, serialized):
@@ -314,8 +314,26 @@ static int cli_camera(int argc, char **argv) {
         strcmp(argv[1], "list") == 0 || strcmp(argv[1], "select") == 0 || strcmp(argv[1], "lazy") == 0);
 }
 
+static int cli_microphone(int argc, char **argv) {
+    if (argc < 2) { fprintf(stderr, "usage: sense mic <start|stop|status|url|lazy on|off|status>\n"); return 2; }
+    char req[128];
+    if (strcmp(argv[1], "lazy") == 0) {
+        if (argc != 3) { fprintf(stderr, "usage: sense mic lazy <on|off|status>\n"); return 2; }
+        snprintf(req, sizeof(req), "MICROPHONE lazy %s", argv[2]);
+    } else {
+        if (argc != 2) { fprintf(stderr, "usage: sense mic <start|stop|status|url|lazy on|off|status>\n"); return 2; }
+        snprintf(req, sizeof(req), "MICROPHONE %s", argv[1]);
+    }
+    char resp[8192];
+    if (cli_roundtrip(req, resp, sizeof(resp)) < 0) {
+        fprintf(stderr, "podroid: host bridge not available\n"); return 1;
+    }
+    return cli_report(resp, strcmp(argv[1], "start") == 0 || strcmp(argv[1], "status") == 0 || strcmp(argv[1], "url") == 0 ||
+        strcmp(argv[1], "lazy") == 0);
+}
+
 static int cli_sense(int argc, char **argv) {
-    if (argc < 2) { fprintf(stderr, "usage: sense <cam|loc> <command>\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: sense <cam|loc|mic> <command>\n"); return 2; }
     if (strcmp(argv[1], "cam") == 0) return cli_camera(argc - 1, argv + 1);
     if (strcmp(argv[1], "loc") == 0) {
         if (argc != 3) { fprintf(stderr, "usage: sense loc <current|status|address>\n"); return 2; }
@@ -331,7 +349,8 @@ static int cli_sense(int argc, char **argv) {
         }
         return cli_report(resp, 1);
     }
-    fprintf(stderr, "usage: sense <cam|loc> <command>\n");
+    if (strcmp(argv[1], "mic") == 0) return cli_microphone(argc - 1, argv + 1);
+    fprintf(stderr, "usage: sense <cam|loc|mic> <command>\n");
     return 2;
 }
 
