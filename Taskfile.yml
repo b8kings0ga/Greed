@@ -16,9 +16,10 @@ vars:
   YOLO_WORLD_CONF: '{{default "0.01" .YOLO_WORLD_CONF}}'
   YOLO_CLASSES: '{{default "person,face,hand,phone,laptop,keyboard,mouse,monitor,bottle,cup,book,backpack,chair,table,door,window" .YOLO_CLASSES}}'
   STT_SOURCE: '{{default "http://192.168.1.33:18082/stream.wav" .STT_SOURCE}}'
-  STT_MODEL: '{{default "base" .STT_MODEL}}'
+  STT_MODEL: '{{default "tiny" .STT_MODEL}}'
   STT_LANGUAGE: '{{default "auto" .STT_LANGUAGE}}'
-  STT_MIN_RMS: '{{default "0.05" .STT_MIN_RMS}}'
+  STT_MIN_RMS: '{{default "0.025" .STT_MIN_RMS}}'
+  STT_CHUNK_SECONDS: '{{default "2.5" .STT_CHUNK_SECONDS}}'
   STT_TRANSLATE: '{{default "true" .STT_TRANSLATE}}'
   VEGVISIR_REGION: '{{default "brgru" .VEGVISIR_REGION}}'
   VEGVISIR_NOMAD_RPC: >-
@@ -95,6 +96,7 @@ tasks:
           --audio-source "{{.STT_SOURCE}}" \
           --stt-model "{{.STT_MODEL}}" \
           --stt-language "{{.STT_LANGUAGE}}" \
+          --stt-chunk-seconds "{{.STT_CHUNK_SECONDS}}" \
           --stt-min-rms "{{.STT_MIN_RMS}}" \
           {{if eq .STT_TRANSLATE "false"}}--no-stt-translate{{else}}--stt-translate{{end}}
 

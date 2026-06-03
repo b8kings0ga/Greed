@@ -217,6 +217,9 @@ SPEECH_HTML = """<!doctype html>
         data.enabled
           ? `${data.source} · ${data.model} · ${data.language} · audio ${data.audio_age_seconds.toFixed(1)}s${data.error ? " · " + data.error : ""}`
           : "disabled";
+      if (data.enabled) {
+        document.getElementById("meta").textContent += ` · rms ${Number(data.latest_rms || 0).toFixed(3)} · skipped ${data.skipped_chunks || 0}`;
+      }
       const rows = document.getElementById("rows");
       rows.innerHTML = "";
       const segments = data.segments || [];
@@ -262,11 +265,14 @@ class DetectionState:
     audio_source: str = ""
     stt_model: str = ""
     stt_language: str = "auto"
-    stt_min_rms: float = 0.05
+    stt_min_rms: float = 0.025
     stt_translate: bool = True
     stt_audio_buffer: bytearray = field(default_factory=bytearray)
     stt_audio_seq: int = 0
     stt_processed_seq: int = 0
+    stt_last_offset: int = 0
+    stt_latest_rms: float = 0.0
+    stt_skipped_chunks: int = 0
     stt_segments: list[dict[str, Any]] = field(default_factory=list)
     stt_audio_time: float = 0.0
     stt_time: float = 0.0
@@ -447,7 +453,9 @@ def audio_capture_worker(state: DetectionState, buffer_seconds: float) -> None:
                     with state.lock:
                         state.stt_audio_buffer.extend(chunk)
                         if len(state.stt_audio_buffer) > max_bytes:
-                            del state.stt_audio_buffer[: len(state.stt_audio_buffer) - max_bytes]
+                            drop = len(state.stt_audio_buffer) - max_bytes
+                            del state.stt_audio_buffer[:drop]
+                            state.stt_last_offset = max(0, state.stt_last_offset - drop)
                         state.stt_audio_seq += 1
                         state.stt_audio_time = time.time()
                         state.stt_error = None
@@ -464,15 +472,20 @@ def stt_worker(state: DetectionState, chunk_seconds: float) -> None:
     bytes_per_second = 16_000 * 2
     target_bytes = int(bytes_per_second * chunk_seconds)
     min_bytes = int(bytes_per_second * 1.0)
+    step_bytes = max(min_bytes, target_bytes // 2)
 
     while True:
         with state.lock:
-            seq = state.stt_audio_seq
-            if seq == state.stt_processed_seq or len(state.stt_audio_buffer) < min_bytes:
+            buffer_len = len(state.stt_audio_buffer)
+            new_bytes = buffer_len - state.stt_last_offset
+            if buffer_len < min_bytes or new_bytes < step_bytes:
                 pcm = None
             else:
-                pcm = bytes(state.stt_audio_buffer[-target_bytes:])
-                state.stt_processed_seq = seq
+                end = buffer_len
+                start = max(0, end - target_bytes)
+                pcm = bytes(state.stt_audio_buffer[start:end])
+                state.stt_last_offset = max(0, buffer_len - target_bytes // 2)
+                state.stt_processed_seq = state.stt_audio_seq
         if pcm:
             transcribe_pcm16_chunk(state, model, pcm, min_bytes)
         time.sleep(max(0.2, min(1.0, chunk_seconds / 4.0)))
@@ -485,7 +498,11 @@ def transcribe_pcm16_chunk(state: DetectionState, model: Any, pcm: bytes, min_by
 
     audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
     rms = float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0
+    with state.lock:
+        state.stt_latest_rms = rms
     if rms < state.stt_min_rms:
+        with state.lock:
+            state.stt_skipped_chunks += 1
         return
 
     language = None if state.stt_language == "auto" else state.stt_language
@@ -520,8 +537,8 @@ def transcribe_text(model: Any, audio: Any, language: str | None, task: str) -> 
         segment.text.strip()
         for segment in segments
         if segment.text.strip()
-        and getattr(segment, "no_speech_prob", 0.0) < 0.75
-        and getattr(segment, "avg_logprob", 0.0) > -1.2
+        and getattr(segment, "no_speech_prob", 0.0) < 0.9
+        and getattr(segment, "avg_logprob", 0.0) > -1.5
     ]
 
 
@@ -615,6 +632,8 @@ class Handler(BaseHTTPRequestHandler):
                 "model": self.state.stt_model,
                 "language": self.state.stt_language,
                 "min_rms": self.state.stt_min_rms,
+                "latest_rms": self.state.stt_latest_rms,
+                "skipped_chunks": self.state.stt_skipped_chunks,
                 "translate": self.state.stt_translate,
                 "segments": list(self.state.stt_segments[-20:]),
                 "audio_age_seconds": max(0.0, now - self.state.stt_audio_time) if self.state.stt_audio_time else 9999.0,
@@ -660,10 +679,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--conf", type=float, default=0.25)
     parser.add_argument("--stt", action="store_true", help="Transcribe the Podroid microphone WAV stream locally.")
     parser.add_argument("--audio-source", default="http://192.168.1.33:18082/stream.wav")
-    parser.add_argument("--stt-model", default="base", help="faster-whisper model name, for example tiny, base, small.")
+    parser.add_argument("--stt-model", default="tiny", help="faster-whisper model name, for example tiny, base, small.")
     parser.add_argument("--stt-language", default="auto", help="Language code such as en/zh, or auto.")
-    parser.add_argument("--stt-chunk-seconds", type=float, default=4.0)
-    parser.add_argument("--stt-min-rms", type=float, default=0.05, help="Skip low-energy audio chunks below this RMS.")
+    parser.add_argument("--stt-chunk-seconds", type=float, default=2.5)
+    parser.add_argument("--stt-min-rms", type=float, default=0.025, help="Skip low-energy audio chunks below this RMS.")
     parser.add_argument("--stt-translate", action=argparse.BooleanOptionalAction, default=True, help="Also translate speech to English.")
     return parser.parse_args()
 
