@@ -45,6 +45,11 @@ HTML = """<!doctype html>
         <thead><tr><th>class</th><th>count</th><th>best</th></tr></thead>
         <tbody id="objects"></tbody>
       </table>
+      <h2>Seen Objects</h2>
+      <table>
+        <thead><tr><th>class</th><th>seen</th><th>last</th></tr></thead>
+        <tbody id="seen"></tbody>
+      </table>
       <h2>Detections</h2>
       <table>
         <thead><tr><th>class</th><th>conf</th><th>box</th></tr></thead>
@@ -69,6 +74,15 @@ HTML = """<!doctype html>
       for (const row of objectRows) {
         objects.insertAdjacentHTML("beforeend",
           `<tr><td><span class="pill">${row.name}</span></td><td>${row.count}</td><td>${row.best_confidence.toFixed(2)}</td></tr>`);
+      }
+      const seen = document.getElementById("seen");
+      seen.innerHTML = "";
+      if ((data.seen_objects || []).length === 0) {
+        seen.insertAdjacentHTML("beforeend", `<tr><td colspan="3" class="muted">Nothing seen yet</td></tr>`);
+      }
+      for (const row of data.seen_objects || []) {
+        seen.insertAdjacentHTML("beforeend",
+          `<tr><td><span class="pill">${row.name}</span></td><td>${row.total_count}</td><td>${row.last_seen_ago_seconds.toFixed(1)}s</td></tr>`);
       }
       const detections = document.getElementById("detections");
       detections.innerHTML = "";
@@ -116,6 +130,7 @@ class DetectionState:
     latest_jpeg: bytes | None = None
     detections: list[dict[str, Any]] = field(default_factory=list)
     objects: list[dict[str, Any]] = field(default_factory=list)
+    seen_objects: dict[str, dict[str, Any]] = field(default_factory=dict)
     detection_time: float = 0.0
     detection_capture_time: float = 0.0
     error: str | None = None
@@ -144,6 +159,33 @@ def summarize(detections: list[dict[str, Any]]) -> list[dict[str, Any]]:
         item["count"] += 1
         item["best_confidence"] = max(item["best_confidence"], det["confidence"])
     return sorted(by_name.values(), key=lambda x: (-x["count"], -x["best_confidence"], x["name"]))
+
+
+def update_seen(seen: dict[str, dict[str, Any]], detections: list[dict[str, Any]], now: float) -> None:
+    for row in summarize(detections):
+        item = seen.setdefault(row["name"], {
+            "name": row["name"],
+            "total_count": 0,
+            "best_confidence": 0.0,
+            "first_seen": now,
+            "last_seen": now,
+        })
+        item["total_count"] += row["count"]
+        item["best_confidence"] = max(item["best_confidence"], row["best_confidence"])
+        item["last_seen"] = now
+
+
+def seen_snapshot(seen: dict[str, dict[str, Any]], now: float) -> list[dict[str, Any]]:
+    rows = []
+    for item in seen.values():
+        rows.append({
+            "name": item["name"],
+            "total_count": item["total_count"],
+            "best_confidence": item["best_confidence"],
+            "first_seen_ago_seconds": max(0.0, now - item["first_seen"]),
+            "last_seen_ago_seconds": max(0.0, now - item["last_seen"]),
+        })
+    return sorted(rows, key=lambda x: (x["last_seen_ago_seconds"], -x["total_count"], x["name"]))
 
 
 def capture_worker(state: DetectionState) -> None:
@@ -207,11 +249,13 @@ def worker(state: DetectionState, model_name: str, imgsz: int, confidence: float
         annotated = draw_detections(frame, detections)
         ok, encoded = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 78])
         if ok:
+            now = time.time()
             with state.lock:
                 state.latest_jpeg = encoded.tobytes()
                 state.detections = detections
                 state.objects = summarize(detections)
-                state.detection_time = time.time()
+                update_seen(state.seen_objects, detections, now)
+                state.detection_time = now
                 state.detection_capture_time = capture_time
                 state.error = None
 
@@ -250,14 +294,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def snapshot(self) -> dict[str, Any]:
         with self.state.lock:
+            now = time.time()
             return {
                 "source": self.state.source,
                 "fps_target": self.state.fps_target,
                 "detections": list(self.state.detections),
                 "objects": list(self.state.objects),
-                "capture_age_seconds": max(0.0, time.time() - self.state.capture_time) if self.state.capture_time else 9999.0,
-                "detection_age_seconds": max(0.0, time.time() - self.state.detection_time) if self.state.detection_time else 9999.0,
-                "detection_frame_age_seconds": max(0.0, time.time() - self.state.detection_capture_time)
+                "seen_objects": seen_snapshot(self.state.seen_objects, now),
+                "capture_age_seconds": max(0.0, now - self.state.capture_time) if self.state.capture_time else 9999.0,
+                "detection_age_seconds": max(0.0, now - self.state.detection_time) if self.state.detection_time else 9999.0,
+                "detection_frame_age_seconds": max(0.0, now - self.state.detection_capture_time)
                 if self.state.detection_capture_time else 9999.0,
                 "error": self.state.error,
             }
