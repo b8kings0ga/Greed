@@ -8,7 +8,6 @@ import threading
 import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from typing import Any
 
 
@@ -60,7 +59,7 @@ HTML = """<!doctype html>
       const r = await fetch("/detections.json?t=" + now);
       const data = await r.json();
       document.getElementById("meta").textContent =
-        `${data.source} · ${data.fps_target} fps target · frame ${data.frame_age_seconds.toFixed(1)}s old`;
+        `${data.source} · ${data.fps_target} fps target · capture ${data.capture_age_seconds.toFixed(1)}s · detection ${data.detection_age_seconds.toFixed(1)}s · frame ${data.detection_frame_age_seconds.toFixed(1)}s`;
       const objects = document.getElementById("objects");
       objects.innerHTML = "";
       for (const row of data.objects) {
@@ -87,10 +86,13 @@ class DetectionState:
     lock: threading.Lock = field(default_factory=threading.Lock)
     source: str = ""
     fps_target: float = 1.0
+    latest_frame: Any | None = None
+    capture_time: float = 0.0
     latest_jpeg: bytes | None = None
     detections: list[dict[str, Any]] = field(default_factory=list)
     objects: list[dict[str, Any]] = field(default_factory=list)
-    frame_time: float = 0.0
+    detection_time: float = 0.0
+    detection_capture_time: float = 0.0
     error: str | None = None
 
 
@@ -119,15 +121,12 @@ def summarize(detections: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(by_name.values(), key=lambda x: (-x["count"], -x["best_confidence"], x["name"]))
 
 
-def worker(state: DetectionState, model_name: str, imgsz: int, confidence: float) -> None:
+def capture_worker(state: DetectionState) -> None:
     import cv2
-    from ultralytics import YOLO
-
-    model = YOLO(model_name)
-    period = 1.0 / max(0.1, state.fps_target)
 
     while True:
         capture = cv2.VideoCapture(state.source)
+        capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         if not capture.isOpened():
             with state.lock:
                 state.error = f"failed to open stream: {state.source}"
@@ -136,38 +135,64 @@ def worker(state: DetectionState, model_name: str, imgsz: int, confidence: float
 
         try:
             while True:
-                start = time.monotonic()
                 ok, frame = capture.read()
                 if not ok or frame is None:
                     with state.lock:
                         state.error = "stream read failed"
                     break
-
-                results = model.predict(frame, imgsz=imgsz, conf=confidence, verbose=False)
-                names = results[0].names
-                detections: list[dict[str, Any]] = []
-                for box in results[0].boxes:
-                    cls = int(box.cls[0].item())
-                    conf = float(box.conf[0].item())
-                    xyxy = [float(v) for v in box.xyxy[0].tolist()]
-                    detections.append({"name": str(names[cls]), "confidence": conf, "box": xyxy})
-
-                annotated = draw_detections(frame.copy(), detections)
-                ok, encoded = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 78])
-                if ok:
-                    with state.lock:
-                        state.latest_jpeg = encoded.tobytes()
-                        state.detections = detections
-                        state.objects = summarize(detections)
-                        state.frame_time = time.time()
-                        state.error = None
-
-                elapsed = time.monotonic() - start
-                if elapsed < period:
-                    time.sleep(period - elapsed)
+                with state.lock:
+                    state.latest_frame = frame
+                    state.capture_time = time.time()
+                    if state.latest_jpeg is None:
+                        ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 78])
+                        if ok:
+                            state.latest_jpeg = encoded.tobytes()
+                    state.error = None
         finally:
             capture.release()
-            time.sleep(0.5)
+            time.sleep(0.2)
+
+
+def worker(state: DetectionState, model_name: str, imgsz: int, confidence: float) -> None:
+    import cv2
+    from ultralytics import YOLO
+
+    model = YOLO(model_name)
+    period = 1.0 / max(0.1, state.fps_target)
+
+    while True:
+        start = time.monotonic()
+        with state.lock:
+            frame = None if state.latest_frame is None else state.latest_frame.copy()
+            capture_time = state.capture_time
+
+        if frame is None:
+            time.sleep(0.05)
+            continue
+
+        results = model.predict(frame, imgsz=imgsz, conf=confidence, verbose=False)
+        names = results[0].names
+        detections: list[dict[str, Any]] = []
+        for box in results[0].boxes:
+            cls = int(box.cls[0].item())
+            conf = float(box.conf[0].item())
+            xyxy = [float(v) for v in box.xyxy[0].tolist()]
+            detections.append({"name": str(names[cls]), "confidence": conf, "box": xyxy})
+
+        annotated = draw_detections(frame, detections)
+        ok, encoded = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 78])
+        if ok:
+            with state.lock:
+                state.latest_jpeg = encoded.tobytes()
+                state.detections = detections
+                state.objects = summarize(detections)
+                state.detection_time = time.time()
+                state.detection_capture_time = capture_time
+                state.error = None
+
+        elapsed = time.monotonic() - start
+        if elapsed < period:
+            time.sleep(period - elapsed)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -205,7 +230,10 @@ class Handler(BaseHTTPRequestHandler):
                 "fps_target": self.state.fps_target,
                 "detections": list(self.state.detections),
                 "objects": list(self.state.objects),
-                "frame_age_seconds": max(0.0, time.time() - self.state.frame_time) if self.state.frame_time else 9999.0,
+                "capture_age_seconds": max(0.0, time.time() - self.state.capture_time) if self.state.capture_time else 9999.0,
+                "detection_age_seconds": max(0.0, time.time() - self.state.detection_time) if self.state.detection_time else 9999.0,
+                "detection_frame_age_seconds": max(0.0, time.time() - self.state.detection_capture_time)
+                if self.state.detection_capture_time else 9999.0,
                 "error": self.state.error,
             }
 
@@ -246,8 +274,8 @@ def main() -> None:
     args = parse_args()
     state = DetectionState(source=args.source, fps_target=args.fps)
     Handler.state = state
-    thread = threading.Thread(target=worker, args=(state, args.model, args.imgsz, args.conf), daemon=True)
-    thread.start()
+    threading.Thread(target=capture_worker, args=(state,), daemon=True).start()
+    threading.Thread(target=worker, args=(state, args.model, args.imgsz, args.conf), daemon=True).start()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"YOLO viewer: http://{args.host}:{args.port}")
     print(f"Source: {args.source}")
