@@ -60,18 +60,43 @@ HTML = """<!doctype html>
       const data = await r.json();
       document.getElementById("meta").textContent =
         `${data.source} · ${data.fps_target} fps target · capture ${data.capture_age_seconds.toFixed(1)}s · detection ${data.detection_age_seconds.toFixed(1)}s · frame ${data.detection_frame_age_seconds.toFixed(1)}s`;
+      const objectRows = dedupeObjects(data);
       const objects = document.getElementById("objects");
       objects.innerHTML = "";
-      for (const row of data.objects) {
+      if (objectRows.length === 0) {
+        objects.insertAdjacentHTML("beforeend", `<tr><td colspan="3" class="muted">No objects detected</td></tr>`);
+      }
+      for (const row of objectRows) {
         objects.insertAdjacentHTML("beforeend",
           `<tr><td><span class="pill">${row.name}</span></td><td>${row.count}</td><td>${row.best_confidence.toFixed(2)}</td></tr>`);
       }
       const detections = document.getElementById("detections");
       detections.innerHTML = "";
+      if (data.detections.length === 0) {
+        detections.insertAdjacentHTML("beforeend", `<tr><td colspan="3" class="muted">No boxes</td></tr>`);
+      }
       for (const d of data.detections) {
         detections.insertAdjacentHTML("beforeend",
           `<tr><td>${d.name}</td><td>${d.confidence.toFixed(2)}</td><td>${d.box.map(v => Math.round(v)).join(", ")}</td></tr>`);
       }
+    }
+    function dedupeObjects(data) {
+      const byName = new Map();
+      for (const item of data.objects || []) {
+        byName.set(item.name, {
+          name: item.name,
+          count: Number(item.count) || 0,
+          best_confidence: Number(item.best_confidence) || 0
+        });
+      }
+      for (const det of data.detections || []) {
+        const cur = byName.get(det.name) || { name: det.name, count: 0, best_confidence: 0 };
+        cur.count += 1;
+        cur.best_confidence = Math.max(cur.best_confidence, Number(det.confidence) || 0);
+        byName.set(det.name, cur);
+      }
+      return Array.from(byName.values())
+        .sort((a, b) => b.count - a.count || b.best_confidence - a.best_confidence || a.name.localeCompare(b.name));
     }
     refresh();
     setInterval(refresh, 1000);
