@@ -13,6 +13,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 class MjpegHttpServer(
     private val port: Int = DEFAULT_PORT,
     private val frameProvider: () -> ByteArray?,
+    private val onClientConnected: () -> Unit = {},
+    private val onLastClientDisconnected: () -> Unit = {},
 ) {
     private val running = AtomicBoolean(false)
     private val executor = Executors.newCachedThreadPool()
@@ -21,6 +23,8 @@ class MjpegHttpServer(
 
     val urlForGuest: String get() = "http://10.0.2.2:$port/stream.mjpg"
     val localUrl: String get() = "http://127.0.0.1:$port/stream.mjpg"
+    val isRunning: Boolean get() = running.get()
+    val clientCount: Int get() = clients.size
 
     fun start() {
         if (!running.compareAndSet(false, true)) return
@@ -57,6 +61,7 @@ class MjpegHttpServer(
 
     private fun handleClient(socket: Socket) {
         try {
+            onClientConnected()
             BufferedOutputStream(socket.getOutputStream()).use { out ->
                 out.write(
                     (
@@ -91,6 +96,7 @@ class MjpegHttpServer(
         } finally {
             clients -= socket
             runCatching { socket.close() }
+            if (clients.isEmpty()) onLastClientDisconnected()
         }
     }
 

@@ -169,7 +169,10 @@ class HostRequestDispatcherTest {
         assertEquals("select 0", seen)
         assertEquals("OK ${HostProtocol.enc("url")}", d.handle("CAMERA list"))
         assertEquals("list", seen)
+        assertEquals("OK ${HostProtocol.enc("url")}", d.handle("CAMERA lazy status"))
+        assertEquals("lazy status", seen)
         assertTrue(d.handle("CAMERA sideways").startsWith("ERR "))
         assertTrue(d.handle("CAMERA select").startsWith("ERR "))
+        assertTrue(d.handle("CAMERA lazy sideways").startsWith("ERR "))
     }
 }

@@ -51,14 +51,14 @@ class MainActivity : ComponentActivity() {
             val cameraPermissionLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestPermission(),
             ) { granted ->
-                if (granted) cameraStreamManager.ensureStartedIfPermitted()
+                if (granted) cameraStreamManager.ensureServerStarted()
             }
 
             LaunchedEffect(Unit) {
                 if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.CAMERA)
                     == PackageManager.PERMISSION_GRANTED
                 ) {
-                    cameraStreamManager.ensureStartedIfPermitted()
+                    cameraStreamManager.ensureServerStarted()
                 } else {
                     cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                 }

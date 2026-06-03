@@ -11,7 +11,8 @@
  *   podroid-open      CLI: open a URL on Android (ACTION_VIEW).
  *   podroid-power     CLI: stop/restart the VM, or query status.
  *   podroid-headless  CLI (alias podroid-server): toggle server mode.
- *   podroid-camera    CLI: control/query the Android camera MJPEG stream.
+ *   sense            CLI: Android capability shim (`sense cam ...`).
+ *   podroid-camera   CLI: legacy camera alias.
  *
  * Daemon transport (one request line -> one response line, serialized):
  *   AVF  (podroid.backend=avf in /proc/cmdline): listen AF_VSOCK :9101, accept
@@ -296,11 +297,12 @@ static int cli_headless(int argc, char **argv) {
 }
 
 static int cli_camera(int argc, char **argv) {
-    if (argc < 2) { fprintf(stderr, "usage: podroid-camera <start|stop|status|url|list|select ID>\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: sense cam <start|stop|status|url|list|select ID|lazy on|off|status>\n"); return 2; }
     char req[128];
-    if (strcmp(argv[1], "select") == 0) {
-        if (argc != 3) { fprintf(stderr, "usage: podroid-camera select ID\n"); return 2; }
+    if (strcmp(argv[1], "select") == 0 || strcmp(argv[1], "lazy") == 0) {
+        if (argc != 3) { fprintf(stderr, "usage: sense cam %s %s\n", argv[1], strcmp(argv[1], "select") == 0 ? "ID" : "on|off|status"); return 2; }
         snprintf(req, sizeof(req), "CAMERA select %s", argv[2]);
+        if (strcmp(argv[1], "lazy") == 0) snprintf(req, sizeof(req), "CAMERA lazy %s", argv[2]);
     } else {
         snprintf(req, sizeof(req), "CAMERA %s", argv[1]);
     }
@@ -309,7 +311,14 @@ static int cli_camera(int argc, char **argv) {
         fprintf(stderr, "podroid: host bridge not available\n"); return 1;
     }
     return cli_report(resp, strcmp(argv[1], "status") == 0 || strcmp(argv[1], "url") == 0 ||
-        strcmp(argv[1], "list") == 0 || strcmp(argv[1], "select") == 0);
+        strcmp(argv[1], "list") == 0 || strcmp(argv[1], "select") == 0 || strcmp(argv[1], "lazy") == 0);
+}
+
+static int cli_sense(int argc, char **argv) {
+    if (argc < 2) { fprintf(stderr, "usage: sense cam <command>\n"); return 2; }
+    if (strcmp(argv[1], "cam") == 0) return cli_camera(argc - 1, argv + 1);
+    fprintf(stderr, "usage: sense cam <command>\n");
+    return 2;
 }
 
 /* On QEMU the host channel is /dev/hvc2, a virtio-console TTY that defaults to
@@ -413,6 +422,7 @@ int main(int argc, char **argv) {
     if (strcmp(base, "podroid-open") == 0) return cli_open(argc, argv);
     if (strcmp(base, "podroid-power") == 0) return cli_power(argc, argv);
     if (strcmp(base, "podroid-headless") == 0 || strcmp(base, "podroid-server") == 0) return cli_headless(argc, argv);
+    if (strcmp(base, "sense") == 0) return cli_sense(argc, argv);
     if (strcmp(base, "podroid-camera") == 0) return cli_camera(argc, argv);
     return daemon_main();
 }

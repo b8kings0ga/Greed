@@ -105,14 +105,17 @@ class HostRequestDispatcher(
         return setHeadless(p[1])
     }
 
-    // CAMERA <start|stop|status|url|list|select> [cameraId]
+    // CAMERA <start|stop|status|url|list|select|lazy> [cameraId|on|off|status]
     private suspend fun handleCamera(p: List<String>): String {
         if (p.size !in 2..3) return HostProtocol.err("bad request")
-        if (p[1] !in setOf("start", "stop", "status", "url", "list", "select")) {
-            return HostProtocol.err("usage: start|stop|status|url|list|select")
+        if (p[1] !in setOf("start", "stop", "status", "url", "list", "select", "lazy")) {
+            return HostProtocol.err("usage: start|stop|status|url|list|select|lazy")
         }
         if (p[1] == "select" && p.size != 3) return HostProtocol.err("usage: select <cameraId>")
-        if (p[1] != "select" && p.size != 2) return HostProtocol.err("bad request")
+        if (p[1] == "lazy" && (p.size != 3 || p[2] !in setOf("on", "off", "status"))) {
+            return HostProtocol.err("usage: lazy on|off|status")
+        }
+        if (p[1] !in setOf("select", "lazy") && p.size != 2) return HostProtocol.err("bad request")
         return camera(p.drop(1).joinToString(" "))
     }
 }

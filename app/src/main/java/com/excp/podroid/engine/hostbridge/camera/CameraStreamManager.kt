@@ -15,6 +15,7 @@ import android.media.Image
 import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.SystemClock
 import android.util.Size
 import androidx.core.content.ContextCompat
 import com.excp.podroid.engine.hostbridge.HostProtocol
@@ -28,7 +29,11 @@ class CameraStreamManager @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
     private val lock = Any()
-    private val httpServer = MjpegHttpServer(frameProvider = { latestJpeg })
+    private val httpServer = MjpegHttpServer(
+        frameProvider = { latestJpeg },
+        onClientConnected = { onStreamClientConnected() },
+        onLastClientDisconnected = { onLastStreamClientDisconnected() },
+    )
     @Volatile private var latestJpeg: ByteArray? = null
     @Volatile private var lastError: String? = null
 
@@ -38,9 +43,12 @@ class CameraStreamManager @Inject constructor(
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var running = false
+    private var lazyOnAccess = true
+    private var idleStopToken = 0
     private var selectedCameraId: String? = null
 
     fun start(): String = synchronized(lock) {
+        httpServer.start()
         if (!hasCameraPermission()) {
             lastError = "camera permission not granted"
             return HostProtocol.err(lastError!!)
@@ -48,7 +56,6 @@ class CameraStreamManager @Inject constructor(
         if (running) return HostProtocol.ok(HostProtocol.enc(statusJson()))
         lastError = null
         running = true
-        httpServer.start()
         openCameraLocked()
         HostProtocol.ok(HostProtocol.enc(statusJson()))
     }
@@ -56,6 +63,10 @@ class CameraStreamManager @Inject constructor(
     fun stop(): String = synchronized(lock) {
         stopLocked()
         HostProtocol.ok()
+    }
+
+    fun ensureServerStarted() {
+        httpServer.start()
     }
 
     fun status(): String = synchronized(lock) {
@@ -71,7 +82,7 @@ class CameraStreamManager @Inject constructor(
         if (cameraId !in manager.cameraIdList) return HostProtocol.err("unknown camera id")
         selectedCameraId = cameraId
         if (running) {
-            stopLocked()
+            stopCameraLocked()
             running = true
             httpServer.start()
             openCameraLocked()
@@ -80,12 +91,24 @@ class CameraStreamManager @Inject constructor(
     }
 
     fun url(): String = synchronized(lock) {
-        if (!running) return HostProtocol.err("camera stream not running")
+        httpServer.start()
         HostProtocol.ok(HostProtocol.enc(httpServer.urlForGuest))
     }
 
-    fun ensureStartedIfPermitted() {
-        if (hasCameraPermission()) start()
+    fun lazy(action: String): String = synchronized(lock) {
+        when (action) {
+            "on" -> {
+                lazyOnAccess = true
+                if (httpServer.clientCount == 0) scheduleIdleStopLocked(0)
+            }
+            "off" -> {
+                lazyOnAccess = false
+                start()
+            }
+            "status" -> {}
+            else -> return HostProtocol.err("usage: lazy on|off|status")
+        }
+        HostProtocol.ok(HostProtocol.enc(statusJson()))
     }
 
     fun hasCameraPermission(): Boolean =
@@ -174,9 +197,46 @@ class CameraStreamManager @Inject constructor(
         }.onFailure { lastError = it.message ?: it.javaClass.simpleName }
     }
 
+    private fun onStreamClientConnected() {
+        synchronized(lock) {
+            if (!lazyOnAccess || running) return
+            if (!hasCameraPermission()) {
+                lastError = "camera permission not granted"
+                return
+            }
+            idleStopToken++
+            lastError = null
+            running = true
+            openCameraLocked()
+        }
+    }
+
+    private fun onLastStreamClientDisconnected() {
+        synchronized(lock) {
+            if (lazyOnAccess) scheduleIdleStopLocked(LAZY_IDLE_STOP_MS)
+        }
+    }
+
+    private fun scheduleIdleStopLocked(delayMs: Long) {
+        val token = ++idleStopToken
+        Thread {
+            if (delayMs > 0) SystemClock.sleep(delayMs)
+            synchronized(lock) {
+                if (token == idleStopToken && lazyOnAccess && httpServer.clientCount == 0) {
+                    stopCameraLocked()
+                }
+            }
+        }.start()
+    }
+
     private fun stopLocked() {
-        running = false
+        idleStopToken++
+        stopCameraLocked()
         httpServer.stop()
+    }
+
+    private fun stopCameraLocked() {
+        running = false
         runCatching { captureSession?.stopRepeating() }
         runCatching { captureSession?.close() }
         runCatching { cameraDevice?.close() }
@@ -196,6 +256,9 @@ class CameraStreamManager @Inject constructor(
         return buildString {
             append('{')
             append("\"running\":").append(running)
+            append(",\"serverRunning\":").append(httpServer.isRunning)
+            append(",\"lazyOnAccess\":").append(lazyOnAccess)
+            append(",\"clients\":").append(httpServer.clientCount)
             append(",\"permission\":").append(hasCameraPermission())
             append(",\"frameReady\":").append(frameReady)
             append(",\"url\":\"").append(httpServer.urlForGuest).append('"')
@@ -312,5 +375,6 @@ class CameraStreamManager @Inject constructor(
         private const val WIDTH = 640
         private const val HEIGHT = 480
         private const val JPEG_QUALITY = 70
+        private const val LAZY_IDLE_STOP_MS = 10_000L
     }
 }

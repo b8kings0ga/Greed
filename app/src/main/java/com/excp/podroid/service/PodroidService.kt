@@ -314,7 +314,7 @@ class PodroidService : Service() {
                     // we MUST block here until extraction has fully completed or
                     // the VM could launch against a partial/missing file.
                     (application as? PodroidApplication)?.awaitAssetsReady()
-                    cameraStreamManager.ensureStartedIfPermitted()
+                    cameraStreamManager.ensureServerStarted()
 
                     val rules = portForwardRepository.getRulesSnapshot().toMutableList()
                     val sshEnabled = settingsRepository.getSshEnabledSnapshot()
@@ -488,8 +488,10 @@ class PodroidService : Service() {
             val parts = action.split(" ", limit = 2)
             if (parts.size == 2 && parts[0] == "select") {
                 cameraStreamManager.select(parts[1])
+            } else if (parts.size == 2 && parts[0] == "lazy") {
+                cameraStreamManager.lazy(parts[1])
             } else {
-                com.excp.podroid.engine.hostbridge.HostProtocol.err("usage: start|stop|status|url|list|select")
+                com.excp.podroid.engine.hostbridge.HostProtocol.err("usage: start|stop|status|url|list|select|lazy")
             }
         }
     }

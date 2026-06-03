@@ -2,9 +2,9 @@
 set -eu
 
 OUT="${1:-/mnt/persist/ratatoskr/camera-gallery.html}"
-LIST="$(podroid-camera list)"
-STATUS="$(podroid-camera status 2>/dev/null || true)"
-URL="$(podroid-camera url 2>/dev/null || printf '%s\n' 'http://10.0.2.2:18080/stream.mjpg')"
+LIST="$(sense cam list)"
+STATUS="$(sense cam status 2>/dev/null || true)"
+URL="$(sense cam url 2>/dev/null || printf '%s\n' 'http://10.0.2.2:18080/stream.mjpg')"
 
 mkdir -p "$(dirname "$OUT")"
 
@@ -51,7 +51,7 @@ else
     for id in $ids; do
         printf '      <div class="camera">\n'
         printf '        <h3>Camera %s</h3>\n' "$id"
-        printf '        <code>podroid-camera select %s && podroid-camera start</code>\n' "$id"
+        printf '        <code>sense cam select %s && sense cam start</code>\n' "$id"
         printf '      </div>\n'
     done
 fi
