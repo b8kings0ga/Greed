@@ -8,6 +8,9 @@ vars:
   MIMIR_DIR: '{{default "../Mimir" .MIMIR_DIR}}'
   DIST_APK: '{{default "dist/podroid-debug.apk" .DIST_APK}}'
   RATATOSKR_STAMP: '{{default ".ratatoskr-image-source.sha" .RATATOSKR_STAMP}}'
+  YOLO_VENV: '{{default ".venv-yolo" .YOLO_VENV}}'
+  YOLO_SOURCE: '{{default "http://192.168.1.33:18080/stream.mjpg" .YOLO_SOURCE}}'
+  YOLO_PORT: '{{default "18888" .YOLO_PORT}}'
   VEGVISIR_REGION: '{{default "brgru" .VEGVISIR_REGION}}'
   VEGVISIR_NOMAD_RPC: >-
     [200:fd04:ce3c:3f3f:644:e82d:67a0:68a0]:14647
@@ -30,6 +33,25 @@ tasks:
       - |
         set -eu
         {{.ADB}} devices
+
+  yolo:install:
+    desc: Create a local Python venv for YOLO stream detection.
+    cmds:
+      - |
+        set -eu
+        python3 -m venv "{{.YOLO_VENV}}"
+        "{{.YOLO_VENV}}/bin/python" -m pip install --upgrade pip
+        "{{.YOLO_VENV}}/bin/python" -m pip install ultralytics opencv-python flask pillow
+
+  yolo:stream:
+    desc: Run local YOLO detection on the Podroid camera stream.
+    cmds:
+      - |
+        set -eu
+        test -x "{{.YOLO_VENV}}/bin/python" || task yolo:install
+        "{{.YOLO_VENV}}/bin/python" tools/yolo_stream_viewer.py \
+          --source "{{.YOLO_SOURCE}}" \
+          --port "{{.YOLO_PORT}}"
 
   vegvisir:update:
     desc: Update Podroid Ratatoskr join targets from the local mim tree.

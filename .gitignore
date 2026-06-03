@@ -46,6 +46,10 @@ app/src/main/jniLibs/arm64-v8a/libpodroid-bridge.so
 # Local planning / scratch dirs
 docs/superpowers/
 
+# Local YOLO viewer runtime
+/.venv-yolo/
+/yolov*.pt
+
 # Claude Code sessions
 .claude/
 
