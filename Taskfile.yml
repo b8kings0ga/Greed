@@ -19,6 +19,7 @@ vars:
   STT_MODEL: '{{default "base" .STT_MODEL}}'
   STT_LANGUAGE: '{{default "auto" .STT_LANGUAGE}}'
   STT_MIN_RMS: '{{default "0.05" .STT_MIN_RMS}}'
+  STT_TRANSLATE: '{{default "true" .STT_TRANSLATE}}'
   VEGVISIR_REGION: '{{default "brgru" .VEGVISIR_REGION}}'
   VEGVISIR_NOMAD_RPC: >-
     [200:fd04:ce3c:3f3f:644:e82d:67a0:68a0]:14647
@@ -94,7 +95,8 @@ tasks:
           --audio-source "{{.STT_SOURCE}}" \
           --stt-model "{{.STT_MODEL}}" \
           --stt-language "{{.STT_LANGUAGE}}" \
-          --stt-min-rms "{{.STT_MIN_RMS}}"
+          --stt-min-rms "{{.STT_MIN_RMS}}" \
+          {{if eq .STT_TRANSLATE "false"}}--no-stt-translate{{else}}--stt-translate{{end}}
 
   vegvisir:update:
     desc: Update Podroid Ratatoskr join targets from the local mim tree.

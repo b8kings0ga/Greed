@@ -181,6 +181,65 @@ HTML = """<!doctype html>
 </html>
 """
 
+SPEECH_HTML = """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Podroid Speech</title>
+  <style>
+    body { margin: 0; background: #0f1115; color: #f1f5f9; font: 16px system-ui, sans-serif; }
+    header { padding: 14px 18px; border-bottom: 1px solid #29313d; display: flex; justify-content: space-between; gap: 12px; }
+    main { max-width: 980px; margin: 0 auto; padding: 16px; display: grid; gap: 12px; }
+    .row { background: #151922; border: 1px solid #29313d; padding: 12px; display: grid; gap: 8px; }
+    .time, .meta { color: #94a3b8; font-size: 13px; }
+    .text { font-size: 20px; line-height: 1.35; }
+    .translation { color: #38d399; font-size: 18px; line-height: 1.35; }
+    .empty { color: #94a3b8; padding: 24px; text-align: center; border: 1px solid #29313d; background: #151922; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>Podroid Speech</strong>
+    <span class="meta" id="meta">loading</span>
+  </header>
+  <main id="rows"></main>
+  <script>
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, ch => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[ch]));
+    }
+    async function refresh() {
+      const r = await fetch("/transcript.json?t=" + Date.now());
+      const data = await r.json();
+      document.getElementById("meta").textContent =
+        data.enabled
+          ? `${data.source} · ${data.model} · ${data.language} · audio ${data.audio_age_seconds.toFixed(1)}s${data.error ? " · " + data.error : ""}`
+          : "disabled";
+      const rows = document.getElementById("rows");
+      rows.innerHTML = "";
+      const segments = data.segments || [];
+      if (!segments.length) {
+        rows.innerHTML = `<div class="empty">No speech yet</div>`;
+        return;
+      }
+      for (const row of segments.slice().reverse()) {
+        rows.insertAdjacentHTML("beforeend",
+          `<section class="row">
+             <div class="time">${new Date(row.time * 1000).toLocaleTimeString()} · rms ${Number(row.rms || 0).toFixed(3)}</div>
+             <div class="text">${escapeHtml(row.text || "")}</div>
+             ${row.translation ? `<div class="translation">${escapeHtml(row.translation)}</div>` : ""}
+           </section>`);
+      }
+    }
+    refresh();
+    setInterval(refresh, 700);
+  </script>
+</body>
+</html>
+"""
+
 
 @dataclass
 class DetectionState:
@@ -204,6 +263,10 @@ class DetectionState:
     stt_model: str = ""
     stt_language: str = "auto"
     stt_min_rms: float = 0.05
+    stt_translate: bool = True
+    stt_audio_buffer: bytearray = field(default_factory=bytearray)
+    stt_audio_seq: int = 0
+    stt_processed_seq: int = 0
     stt_segments: list[dict[str, Any]] = field(default_factory=list)
     stt_audio_time: float = 0.0
     stt_time: float = 0.0
@@ -363,6 +426,37 @@ def worker(state: DetectionState, model_name: str, imgsz: int, confidence: float
             time.sleep(period - elapsed)
 
 
+def audio_capture_worker(state: DetectionState, buffer_seconds: float) -> None:
+    bytes_per_second = 16_000 * 2
+    max_bytes = int(bytes_per_second * buffer_seconds)
+
+    while True:
+        try:
+            request = Request(state.audio_source, headers={"User-Agent": "GreedSenseSTT/1.0"})
+            with urlopen(request, timeout=10) as response:
+                wav_header = response.read(44)
+                if len(wav_header) < 44 or wav_header[:4] != b"RIFF":
+                    raise RuntimeError("audio source did not return WAV")
+                with state.lock:
+                    state.stt_error = None
+                    state.stt_audio_buffer.clear()
+                while True:
+                    chunk = response.read(4096)
+                    if not chunk:
+                        raise RuntimeError("audio stream ended")
+                    with state.lock:
+                        state.stt_audio_buffer.extend(chunk)
+                        if len(state.stt_audio_buffer) > max_bytes:
+                            del state.stt_audio_buffer[: len(state.stt_audio_buffer) - max_bytes]
+                        state.stt_audio_seq += 1
+                        state.stt_audio_time = time.time()
+                        state.stt_error = None
+        except Exception as e:
+            with state.lock:
+                state.stt_error = str(e)
+            time.sleep(1.5)
+
+
 def stt_worker(state: DetectionState, chunk_seconds: float) -> None:
     from faster_whisper import WhisperModel
 
@@ -372,31 +466,16 @@ def stt_worker(state: DetectionState, chunk_seconds: float) -> None:
     min_bytes = int(bytes_per_second * 1.0)
 
     while True:
-        try:
-            request = Request(state.audio_source, headers={"User-Agent": "GreedSenseSTT/1.0"})
-            with urlopen(request, timeout=10) as response:
-                wav_header = response.read(44)
-                if len(wav_header) < 44 or wav_header[:4] != b"RIFF":
-                    raise RuntimeError("audio source did not return WAV")
-                pending = bytearray()
-                with state.lock:
-                    state.stt_error = None
-                while True:
-                    chunk = response.read(4096)
-                    if not chunk:
-                        raise RuntimeError("audio stream ended")
-                    pending.extend(chunk)
-                    with state.lock:
-                        state.stt_audio_time = time.time()
-                        state.stt_error = None
-                    if len(pending) >= target_bytes:
-                        pcm = bytes(pending[:target_bytes])
-                        del pending[:target_bytes]
-                        transcribe_pcm16_chunk(state, model, pcm, min_bytes)
-        except Exception as e:
-            with state.lock:
-                state.stt_error = str(e)
-            time.sleep(1.5)
+        with state.lock:
+            seq = state.stt_audio_seq
+            if seq == state.stt_processed_seq or len(state.stt_audio_buffer) < min_bytes:
+                pcm = None
+            else:
+                pcm = bytes(state.stt_audio_buffer[-target_bytes:])
+                state.stt_processed_seq = seq
+        if pcm:
+            transcribe_pcm16_chunk(state, model, pcm, min_bytes)
+        time.sleep(max(0.2, min(1.0, chunk_seconds / 4.0)))
 
 
 def transcribe_pcm16_chunk(state: DetectionState, model: Any, pcm: bytes, min_bytes: int) -> None:
@@ -410,9 +489,26 @@ def transcribe_pcm16_chunk(state: DetectionState, model: Any, pcm: bytes, min_by
         return
 
     language = None if state.stt_language == "auto" else state.stt_language
+    accepted = transcribe_text(model, audio, language=language, task="transcribe")
+    text = " ".join(accepted).strip()
+    if not text:
+        return
+    translation = ""
+    if state.stt_translate:
+        translation = " ".join(transcribe_text(model, audio, language=language, task="translate")).strip()
+    now = time.time()
+    with state.lock:
+        state.stt_segments.append({"time": now, "text": text, "translation": translation, "rms": rms})
+        state.stt_segments = state.stt_segments[-100:]
+        state.stt_time = now
+        state.stt_error = None
+
+
+def transcribe_text(model: Any, audio: Any, language: str | None, task: str) -> list[str]:
     segments, _info = model.transcribe(
         audio,
         language=language,
+        task=task,
         beam_size=1,
         vad_filter=True,
         temperature=0.0,
@@ -420,22 +516,13 @@ def transcribe_pcm16_chunk(state: DetectionState, model: Any, pcm: bytes, min_by
         log_prob_threshold=-1.0,
         condition_on_previous_text=False,
     )
-    accepted = [
+    return [
         segment.text.strip()
         for segment in segments
         if segment.text.strip()
         and getattr(segment, "no_speech_prob", 0.0) < 0.75
         and getattr(segment, "avg_logprob", 0.0) > -1.2
     ]
-    text = " ".join(accepted).strip()
-    if not text:
-        return
-    now = time.time()
-    with state.lock:
-        state.stt_segments.append({"time": now, "text": text, "rms": rms})
-        state.stt_segments = state.stt_segments[-100:]
-        state.stt_time = now
-        state.stt_error = None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -485,6 +572,13 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(jpeg)
             return
+        if self.path.startswith("/speech"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(SPEECH_HTML.encode("utf-8"))
+            return
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
@@ -521,6 +615,7 @@ class Handler(BaseHTTPRequestHandler):
                 "model": self.state.stt_model,
                 "language": self.state.stt_language,
                 "min_rms": self.state.stt_min_rms,
+                "translate": self.state.stt_translate,
                 "segments": list(self.state.stt_segments[-20:]),
                 "audio_age_seconds": max(0.0, now - self.state.stt_audio_time) if self.state.stt_audio_time else 9999.0,
                 "transcript_age_seconds": max(0.0, now - self.state.stt_time) if self.state.stt_time else 9999.0,
@@ -569,6 +664,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stt-language", default="auto", help="Language code such as en/zh, or auto.")
     parser.add_argument("--stt-chunk-seconds", type=float, default=4.0)
     parser.add_argument("--stt-min-rms", type=float, default=0.05, help="Skip low-energy audio chunks below this RMS.")
+    parser.add_argument("--stt-translate", action=argparse.BooleanOptionalAction, default=True, help="Also translate speech to English.")
     return parser.parse_args()
 
 
@@ -585,11 +681,13 @@ def main() -> None:
         stt_model=args.stt_model,
         stt_language=args.stt_language,
         stt_min_rms=args.stt_min_rms,
+        stt_translate=args.stt_translate,
     )
     Handler.state = state
     threading.Thread(target=capture_worker, args=(state,), daemon=True).start()
     threading.Thread(target=worker, args=(state, args.model, args.imgsz, args.conf, args.world), daemon=True).start()
     if args.stt:
+        threading.Thread(target=audio_capture_worker, args=(state, max(args.stt_chunk_seconds * 3, 12.0)), daemon=True).start()
         threading.Thread(target=stt_worker, args=(state, args.stt_chunk_seconds), daemon=True).start()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"YOLO viewer: http://{args.host}:{args.port}")
@@ -598,7 +696,8 @@ def main() -> None:
         print(f"YOLO-World classes: {', '.join(target_classes)}")
     if args.stt:
         print(f"STT source: {args.audio_source}")
-        print(f"STT model: {args.stt_model} language={args.stt_language} min_rms={args.stt_min_rms}")
+        print(f"STT model: {args.stt_model} language={args.stt_language} min_rms={args.stt_min_rms} translate={args.stt_translate}")
+        print(f"Speech page: http://{args.host}:{args.port}/speech")
     server.serve_forever()
 
 
