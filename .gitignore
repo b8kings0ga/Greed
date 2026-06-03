@@ -19,6 +19,9 @@ local.properties
 # Kotlin
 .kotlin/
 
+# Python
+__pycache__/
+
 # Native build
 .externalNativeBuild/
 .cxx/
