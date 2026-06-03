@@ -37,7 +37,7 @@ class MjpegHttpServer(
 
     private fun acceptLoop() {
         try {
-            ServerSocket(port, 8, InetAddress.getByName("127.0.0.1")).use { socket ->
+            ServerSocket(port, 8, InetAddress.getByName("0.0.0.0")).use { socket ->
                 serverSocket = socket
                 while (running.get()) {
                     val client = socket.accept()

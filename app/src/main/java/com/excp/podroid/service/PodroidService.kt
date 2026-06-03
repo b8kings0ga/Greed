@@ -558,6 +558,8 @@ class PodroidService : Service() {
             com.excp.podroid.data.repository.PortForwardRule(14223, 14223, "tcp"),
             com.excp.podroid.data.repository.PortForwardRule(14220, 14220, "tcp"),
             com.excp.podroid.data.repository.PortForwardRule(7422, 7422, "tcp"),
+            com.excp.podroid.data.repository.PortForwardRule(8080, 8080, "tcp"),
+            com.excp.podroid.data.repository.PortForwardRule(8443, 8443, "tcp"),
         )
 
         fun start(context: Context) {
