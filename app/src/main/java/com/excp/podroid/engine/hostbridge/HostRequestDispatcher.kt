@@ -121,10 +121,10 @@ class HostRequestDispatcher(
         return camera(p.drop(1).joinToString(" "))
     }
 
-    // LOCATION <current|status>
+    // LOCATION <current|status|address>
     private suspend fun handleLocation(p: List<String>): String {
         if (p.size != 2) return HostProtocol.err("bad request")
-        if (p[1] !in setOf("current", "status")) return HostProtocol.err("usage: current|status")
+        if (p[1] !in setOf("current", "status", "address")) return HostProtocol.err("usage: current|status|address")
         return location(p[1])
     }
 }

@@ -318,9 +318,10 @@ static int cli_sense(int argc, char **argv) {
     if (argc < 2) { fprintf(stderr, "usage: sense <cam|loc> <command>\n"); return 2; }
     if (strcmp(argv[1], "cam") == 0) return cli_camera(argc - 1, argv + 1);
     if (strcmp(argv[1], "loc") == 0) {
-        if (argc != 3) { fprintf(stderr, "usage: sense loc <current|status>\n"); return 2; }
-        if (strcmp(argv[2], "current") != 0 && strcmp(argv[2], "status") != 0) {
-            fprintf(stderr, "usage: sense loc <current|status>\n"); return 2;
+        if (argc != 3) { fprintf(stderr, "usage: sense loc <current|status|address>\n"); return 2; }
+        if (strcmp(argv[2], "current") != 0 && strcmp(argv[2], "status") != 0 &&
+            strcmp(argv[2], "address") != 0) {
+            fprintf(stderr, "usage: sense loc <current|status|address>\n"); return 2;
         }
         char req[64];
         snprintf(req, sizeof(req), "LOCATION %s", argv[2]);

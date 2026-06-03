@@ -185,6 +185,8 @@ class HostRequestDispatcherTest {
         assertEquals("current", seen)
         assertEquals("OK ${HostProtocol.enc("loc")}", d.handle("LOCATION status"))
         assertEquals("status", seen)
+        assertEquals("OK ${HostProtocol.enc("loc")}", d.handle("LOCATION address"))
+        assertEquals("address", seen)
         assertTrue(d.handle("LOCATION watch").startsWith("ERR "))
     }
 }

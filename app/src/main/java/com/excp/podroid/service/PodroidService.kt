@@ -501,7 +501,8 @@ class PodroidService : Service() {
     private suspend fun handleLocationRequest(action: String): String = when (action) {
         "current" -> locationSenseManager.current()
         "status" -> locationSenseManager.status()
-        else -> com.excp.podroid.engine.hostbridge.HostProtocol.err("usage: current|status")
+        "address" -> locationSenseManager.address()
+        else -> com.excp.podroid.engine.hostbridge.HostProtocol.err("usage: current|status|address")
     }
 
     // Reply returned now; the stop/restart is posted to the main looper so the
