@@ -65,6 +65,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.excp.podroid.BuildConfig
 import com.excp.podroid.R
+import com.excp.podroid.data.repository.MAX_PORT_FORWARD_RULES
 import com.excp.podroid.data.repository.PortForwardRepository
 import com.excp.podroid.data.repository.PortForwardRule
 import com.excp.podroid.engine.EngineSelection
@@ -387,6 +388,7 @@ fun SettingsScreen(
     if (showAddDialog) {
         AddPortForwardDialog(
             onDismiss = { showAddDialog = false },
+            tableFull = portForwardRules.size >= MAX_PORT_FORWARD_RULES,
             onAdd = { hostPort, guestPort, protocol ->
                 // Only close the dialog when the rule was actually added.
                 // addPortForward returns false if the (hostPort, protocol) pair
@@ -757,6 +759,9 @@ private fun AdvancedFieldsBlock(
 @Composable
 private fun AddPortForwardDialog(
     onDismiss: () -> Unit,
+    // The repository refuses rules past its ceiling. Checking here too keeps the
+    // message truthful: without it a refusal would surface as "already forwarded".
+    tableFull: Boolean,
     // Returns true if the rule was added, false if it was a duplicate.
     // The dialog shows an error and stays open on false.
     onAdd: (hostPort: Int, guestPort: Int, protocol: String) -> Boolean,
@@ -826,6 +831,10 @@ private fun AddPortForwardDialog(
                 }
                 if (hp in PortForwardRepository.RESERVED_HOST_PORTS) {
                     error = context.getString(R.string.port_reserved, hp)
+                    return@TextButton
+                }
+                if (tableFull) {
+                    error = context.getString(R.string.port_forward_table_full, MAX_PORT_FORWARD_RULES)
                     return@TextButton
                 }
                 val added = onAdd(hp, gp, protocol)

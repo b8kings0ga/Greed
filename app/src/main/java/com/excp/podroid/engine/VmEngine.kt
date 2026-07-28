@@ -68,6 +68,19 @@ interface VmEngine {
     suspend fun removePortForward(rule: PortForwardRule)
 
     /**
+     * Of the rules handed to [start], the ones this backend has actually applied
+     * by the time the VM reaches Running. Everything else must be pushed in
+     * afterwards through [addPortForward].
+     *
+     * EngineHolder seeds its reconciliation state from this, so an engine that
+     * over-reports here loses the difference silently: those rules are recorded
+     * as live and never applied. Defaults to all of them, which is true for AVF
+     * (its forwarder takes the whole set at start). QEMU narrows it, because a
+     * forward on its command line can stop the VM booting at all.
+     */
+    fun rulesAppliedAtLaunch(all: Collection<PortForwardRule>): Set<PortForwardRule> = all.toSet()
+
+    /**
      * Backend-specific diagnostics for the export log: AVF stop/crash reason +
      * launch config, or QEMU exit code + stderr tail. Empty when there's nothing
      * backend-specific to add. Observational; never mutates VM state.

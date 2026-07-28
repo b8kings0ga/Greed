@@ -3,6 +3,7 @@ package com.excp.podroid.engine.hostbridge
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import com.excp.podroid.data.repository.AddRuleResult
 import com.excp.podroid.data.repository.PortForwardRule
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertTrue
@@ -38,9 +39,16 @@ private fun dispatcher(
     camera: suspend (String) -> String = { HostProtocol.ok() },
     location: suspend (String) -> String = { HostProtocol.ok() },
     microphone: suspend (String) -> String = { HostProtocol.ok() },
+    addResult: AddRuleResult = AddRuleResult.ADDED,
 ) = HostRequestDispatcher(
     notifications = poster,
-    addForward = { r -> rules.removeAll { it.hostPort == r.hostPort && it.protocol == r.protocol }; rules.add(r) },
+    addForward = { r ->
+        if (addResult == AddRuleResult.ADDED) {
+            rules.removeAll { it.hostPort == r.hostPort && it.protocol == r.protocol }
+            rules.add(r)
+        }
+        addResult
+    },
     removeForward = { r -> rules.removeAll { it.hostPort == r.hostPort && it.protocol == r.protocol } },
     listForwards = { rules.toList() },
     openUrl = openUrl,
@@ -98,6 +106,23 @@ class HostRequestDispatcherTest {
         val rules = mutableListOf<PortForwardRule>()
         assertEquals("OK", dispatcher(rules = rules).handle("FWD-ADD 8080 80 tcp"))
         assertEquals("tcp", rules.single().protocol)
+    }
+
+    @Test fun fwdAddReportsARefusedRuleInsteadOfOk() = runBlocking {
+        // The CLI printing OK for a rule the repository dropped is how a user ends
+        // up believing a thousand forwards exist when the table stopped taking them.
+        val rules = mutableListOf<PortForwardRule>()
+        val resp = dispatcher(rules = rules, addResult = AddRuleResult.TABLE_FULL)
+            .handle("FWD-ADD 8080 80 tcp")
+        assertTrue(resp.startsWith("ERR "))
+        // The reason rides base64 like every other free-text field on this wire.
+        assertTrue(HostProtocol.dec(resp.removePrefix("ERR "))!!.contains("full"))
+        assertEquals(0, rules.size)
+    }
+
+    @Test fun fwdAddReportsAReservedPort() = runBlocking {
+        val resp = dispatcher(addResult = AddRuleResult.RESERVED).handle("FWD-ADD 5900 5900 tcp")
+        assertTrue(resp.startsWith("ERR "))
     }
 
     @Test fun fwdAddRejectsBadPort() = runBlocking {

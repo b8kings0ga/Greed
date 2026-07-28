@@ -123,6 +123,11 @@ podman run -d -p 8080:80 nginx
 # Then from your laptop on the same Wi-Fi:</span>
 curl http://&lt;phone-ip&gt;:8080</code></pre>
 
+      <h3>Limits on the rule list</h3>
+      <p>A host port that something else on the phone is already using cannot be forwarded. That rule alone fails and is retried whenever the list changes; the VM keeps running and every other rule is unaffected. Android hands out ports from 32768 upwards to ordinary apps, so a rule in that range is the most likely one to collide - pick host ports below it when you have the choice.</p>
+
+      <p>Up to 128 rules can be saved. The limit exists because each rule is a listening socket and a row in Settings, and because a shell loop can otherwise add thousands of them in a second. <code>podroid-forward</code> reports an error rather than reporting success once the list is full.</p>
+
       <h2>Talking back to Android from the guest</h2>
       <p>Several command-line tools ship inside the VM so scripts and shell sessions can reach the Android side directly, without the in-app UI. They all work on the QEMU and AVF backends.</p>
 

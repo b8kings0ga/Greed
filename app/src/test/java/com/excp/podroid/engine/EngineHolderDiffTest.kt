@@ -61,6 +61,28 @@ class EngineHolderDiffTest {
     }
 
     @Test
+    fun `user rules kept off the cmdline are applied on the Running edge`() {
+        // QEMU bakes only the implicit forwards into its launch cmdline, because
+        // SLIRP kills the whole VM over one hostfwd it cannot bind. Everything
+        // else has to arrive over QMP instead, which only happens if the →Running
+        // seeding reflects what the engine ACTUALLY applied rather than the whole
+        // launch set. Seeding it from launchRules here would compute added ==
+        // empty and the user's forwards would silently never exist.
+        // loopbackOnly is what marks the viewer's pair as app-injected, and it is
+        // what keeps them on the cmdline, so the fixture has to carry it.
+        val ssh = rule(9922, 22)
+        val vnc = PortForwardRule(5900, 5900, "tcp", loopbackOnly = true)
+        val audio = PortForwardRule(4713, 4713, "tcp", loopbackOnly = true)
+        val userRules = setOf(rule(8080), rule(2121))
+        val launch = userRules + setOf(ssh, vnc, audio)
+        val appliedAtLaunch = QemuEngine.inlineLaunchRules(launch).toSet()
+        val implicit = launch - userRules
+        val (added, removed) = computeRuleDiff(applied = appliedAtLaunch, desired = userRules + implicit)
+        assertEquals(userRules, added)
+        assertEquals(emptySet<PortForwardRule>(), removed)
+    }
+
+    @Test
     fun `implicit always-on forwards are never removed`() {
         // SSH/VNC/audio are injected into the launch set by PodroidService but
         // never persisted to the DataStore, so they appear in launchRules yet

@@ -153,10 +153,13 @@ class EngineHolder @Inject constructor(
                     return@collect
                 }
                 if (!wasRunning) {
-                    // Entering Running: launchRules are already baked into the
-                    // launch cmdline, so treat them as applied. Unchanged boot →
-                    // added/removed empty; a rule removed mid-boot → removed.
-                    appliedRules = launchRules
+                    // Entering Running: seed from what the engine actually applied
+                    // while launching, which is NOT always the whole launch set.
+                    // QEMU keeps user rules off its cmdline (one hostfwd it cannot
+                    // bind kills the VM), so those arrive here as `added` and go in
+                    // over QMP. Seeding from launchRules instead would mark them
+                    // applied and they would silently never exist.
+                    appliedRules = eng.rulesAppliedAtLaunch(launchRules)
                     // The implicit always-on forwards (in launchRules but never
                     // persisted to the DataStore) must never be torn down by the
                     // diff. Capture them once here so they can be folded into

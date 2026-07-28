@@ -130,4 +130,45 @@ class PortForwardRepositoryTest {
         val result = deduplicatePortForwards(emptySet<String>(), newRule)
         assertEquals(setOf(newRule.serialize()), result)
     }
+
+    // ------------------------------------------------------------------
+    // table size limit
+    //
+    // Unbounded growth is how one user ended up with 1005 persisted rules,
+    // which is both unusable in the UI and a thousand QMP round trips on every
+    // boot. The limit is a guard rail on a scripted loop, not on human use.
+    // ------------------------------------------------------------------
+
+    private fun tableOf(n: Int): Set<String> =
+        (1..n).map { PortForwardRule(20000 + it, 20000 + it, "tcp").serialize() }.toSet()
+
+    @Test
+    fun `a table below the limit accepts a new rule`() {
+        val full = portForwardTableIsFull(tableOf(MAX_PORT_FORWARD_RULES - 1), PortForwardRule(9000, 9000))
+        assertEquals(false, full)
+    }
+
+    @Test
+    fun `a full table rejects a new host port`() {
+        val full = portForwardTableIsFull(tableOf(MAX_PORT_FORWARD_RULES), PortForwardRule(9000, 9000))
+        assertEquals(true, full)
+    }
+
+    @Test
+    fun `a full table still accepts a rule that replaces an existing one`() {
+        // Re-pointing an existing (hostPort, protocol) is not growth, and refusing
+        // it would leave a user at the limit unable to correct a wrong rule.
+        val existing = tableOf(MAX_PORT_FORWARD_RULES)
+        val replacement = PortForwardRule(20001, 40001, "tcp")
+        assertEquals(false, portForwardTableIsFull(existing, replacement))
+        assertEquals(MAX_PORT_FORWARD_RULES, deduplicatePortForwards(existing, replacement).size)
+    }
+
+    @Test
+    fun `a full table accepts the other protocol on a used host port`() {
+        // (hostPort, protocol) is the key, so udp on a tcp port is a NEW rule and
+        // must be refused at the limit rather than silently overwriting the tcp one.
+        val existing = tableOf(MAX_PORT_FORWARD_RULES)
+        assertEquals(true, portForwardTableIsFull(existing, PortForwardRule(20001, 20001, "udp")))
+    }
 }

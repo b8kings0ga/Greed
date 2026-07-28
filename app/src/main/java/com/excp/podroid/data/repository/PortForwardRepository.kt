@@ -66,6 +66,36 @@ data class PortForwardRule(
  * with the same host port and protocol would produce duplicate QEMU hostfwd
  * arguments and a duplicate Compose key crash.
  */
+/**
+ * Ceiling on persisted rules. Not a human limit — it exists because
+ * `podroid-forward add` in a shell loop can produce thousands, and every rule is
+ * a listening socket, a row in the Settings list, and a QMP round trip on every
+ * boot. One user scripted 1005 of them and made their VM unstartable.
+ */
+internal const val MAX_PORT_FORWARD_RULES = 128
+
+/** Outcome of [PortForwardRepository.addRule]. */
+enum class AddRuleResult { ADDED, RESERVED, TABLE_FULL }
+
+/**
+ * Whether [newRule] would push the table past [max]. Replacing an existing
+ * (hostPort, protocol) is not growth, so it stays allowed at the limit —
+ * otherwise a full table could not be corrected, only cleared.
+ */
+internal fun portForwardTableIsFull(
+    current: Set<String>,
+    newRule: PortForwardRule,
+    max: Int = MAX_PORT_FORWARD_RULES,
+): Boolean {
+    if (current.size < max) return false
+    return current.none { serialized ->
+        val existing = PortForwardRule.deserialize(serialized)
+        existing != null &&
+            existing.hostPort == newRule.hostPort &&
+            existing.protocol == newRule.protocol
+    }
+}
+
 internal fun deduplicatePortForwards(
     current: Set<String>,
     newRule: PortForwardRule,
@@ -112,12 +142,23 @@ class PortForwardRepository @Inject constructor(
         }
         .distinctUntilChanged()
 
-    suspend fun addRule(rule: PortForwardRule) {
-        if (rule.hostPort in RESERVED_HOST_PORTS) return
+    /**
+     * Persist a rule. Returns why it was refused when it was, so a caller that
+     * can show the reason does not have to guess — the guest CLI in particular
+     * used to print OK for a rule that was dropped here.
+     */
+    suspend fun addRule(rule: PortForwardRule): AddRuleResult {
+        if (rule.hostPort in RESERVED_HOST_PORTS) return AddRuleResult.RESERVED
+        var result = AddRuleResult.ADDED
         context.dataStore.edit { prefs ->
             val current = prefs[KEY_PORT_FORWARDS] ?: emptySet()
+            if (portForwardTableIsFull(current, rule)) {
+                result = AddRuleResult.TABLE_FULL
+                return@edit
+            }
             prefs[KEY_PORT_FORWARDS] = deduplicatePortForwards(current, rule)
         }
+        return result
     }
 
     suspend fun removeRule(rule: PortForwardRule) {

@@ -8,11 +8,13 @@
  */
 package com.excp.podroid.engine.hostbridge
 
+import com.excp.podroid.data.repository.AddRuleResult
+import com.excp.podroid.data.repository.MAX_PORT_FORWARD_RULES
 import com.excp.podroid.data.repository.PortForwardRule
 
 class HostRequestDispatcher(
     private val notifications: NotificationPoster,
-    private val addForward: suspend (PortForwardRule) -> Unit,
+    private val addForward: suspend (PortForwardRule) -> AddRuleResult,
     private val removeForward: suspend (PortForwardRule) -> Unit,
     private val listForwards: suspend () -> List<PortForwardRule>,
     private val openUrl: suspend (String) -> String,
@@ -75,8 +77,15 @@ class HostRequestDispatcher(
         // fails to apply on every diff and every boot while the guest CLI saw OK.
         if (host < 1024) return HostProtocol.err("host port must be >= 1024 (Android apps can't bind privileged ports)")
         if (proto !in validProtocols) return HostProtocol.err("bad protocol")
-        addForward(PortForwardRule(host, guest, proto))
-        return HostProtocol.ok()
+        // Report a refusal instead of printing OK for a rule that was dropped:
+        // a CLI that lies about this is how a user ends up believing 1000 rules
+        // exist when the table stopped accepting them long before.
+        return when (addForward(PortForwardRule(host, guest, proto))) {
+            AddRuleResult.ADDED -> HostProtocol.ok()
+            AddRuleResult.RESERVED -> HostProtocol.err("host port $host is reserved for the in-app desktop")
+            AddRuleResult.TABLE_FULL ->
+                HostProtocol.err("port forward table is full ($MAX_PORT_FORWARD_RULES rules); remove some first")
+        }
     }
 
     // FWD-REMOVE <hostPort> <proto>

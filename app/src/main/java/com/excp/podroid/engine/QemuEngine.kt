@@ -588,7 +588,10 @@ class QemuEngine @Inject constructor(
 
         val netdevArg = buildString {
             append("user,id=net0,ipv6=off")
-            for (rule in portForwards) {
+            // Only the implicit forwards go here; user rules arrive over QMP once
+            // the VM is up. See inlineLaunchRules for why that distinction is
+            // load-bearing rather than cosmetic.
+            for (rule in inlineLaunchRules(portForwards)) {
                 // hostfwd hostaddr: empty = 0.0.0.0 (LAN-reachable, user rules);
                 // 127.0.0.1 for loopbackOnly rules (implicit VNC/audio) so they
                 // aren't exposed to the network.
@@ -740,9 +743,43 @@ class QemuEngine @Inject constructor(
         }
     }
 
+    /**
+     * QEMU applies only the implicit forwards while launching; the rest have to
+     * be pushed in over QMP once the VM is Running.
+     */
+    override fun rulesAppliedAtLaunch(all: Collection<PortForwardRule>): Set<PortForwardRule> =
+        inlineLaunchRules(all).toSet()
+
     companion object {
         private const val TAG = "QemuEngine"
         private const val STDERR_TAIL_LINES = 40
+
+        /**
+         * The port forwards allowed onto QEMU's launch command line.
+         *
+         * SLIRP treats a hostfwd it cannot set up as fatal: QEMU exits 1 before
+         * the machine starts. Rules are persisted, so anything inlined here can
+         * make the VM permanently unstartable, with the app offering no way to
+         * edit the rules that are blocking it. One user hit exactly that by
+         * scripting 1005 forwards, most of them inside Android's ephemeral port
+         * range where something is always already bound; the VM never booted
+         * again and they wiped it believing the data was gone.
+         *
+         * So the command line carries only what the app injects itself and needs
+         * from the first instant: the loopback-bound VNC and audio pair behind
+         * the in-app viewer, and SSH (guest port 22), which is the way back in
+         * when everything else is broken. Those are three fixed ports the app
+         * controls, all below the ephemeral range.
+         *
+         * User rules go in through [addPortForward] on the →Running edge, where
+         * a rule that cannot bind fails alone and is retried on the next diff.
+         * This also un-bricks anyone already stuck: their rules simply stop being
+         * a launch argument.
+         */
+        fun inlineLaunchRules(all: Collection<PortForwardRule>): List<PortForwardRule> =
+            all.filter { it.loopbackOnly || it.guestPort == SSH_GUEST_PORT }
+
+        private const val SSH_GUEST_PORT = 22
 
         /** Shared deadline for start()'s socket-readiness loop and the boot monitor's connect wait. */
         private const val SOCKET_READY_TIMEOUT_MS = 10_000L
