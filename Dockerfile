@@ -182,7 +182,7 @@ FROM --platform=linux/arm64/v8 alpine:3.23 AS rootfs-builder
 RUN apk update && apk add --no-cache \
     bash busybox busybox-extras ttyd podman \
     netavark aardvark-dns fuse-overlayfs slirp4netns iptables ip6tables \
-    shadow-uidmap ca-certificates crun curl e2fsprogs util-linux openrc \
+    shadow-uidmap ca-certificates crun curl e2fsprogs e2fsprogs-extra util-linux openrc \
     dropbear ncurses-terminfo-base musl-locales kmod fastfetch
 COPY init-podroid /init
 RUN chmod +x /init

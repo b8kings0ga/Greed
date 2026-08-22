@@ -41,6 +41,12 @@ if ! mount -t ext4 -o rw,noatime,commit=1,barrier=1 /dev/vda /mnt/persist 2>/dev
         || { echo "FATAL: persistent ext4 (/dev/vda) mount failed" > /dev/console; ls -l /dev/vd* > /dev/console 2>&1; exec sh; }
 fi
 
+# Android grows storage.img in place when the user raises the storage size;
+# the ext4 inside still has its old size until it is resized. Online resize is
+# a no-op when nothing changed and must never stop the boot.
+resize2fs /dev/vda >/dev/null 2>&1 \
+    || echo "WARN: resize2fs /dev/vda failed; storage keeps its previous size" > /dev/console
+
 echo "Mounting system..." > /dev/console
 mount -t squashfs -o ro /dev/vdb /mnt/lower \
     || { echo "FATAL: squashfs (/dev/vdb) mount failed" > /dev/console; ls -l /dev/vd* > /dev/console 2>&1; exec sh; }
