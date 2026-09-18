@@ -15,6 +15,8 @@
  */
 package com.excp.podroid.engine.avf
 
+import com.excp.podroid.engine.PersistentStorage
+
 import android.content.Context
 import android.os.Build
 import android.system.Os
@@ -84,7 +86,7 @@ class AvfEngine @Inject constructor(
         private set
 
     // Wall-clock millis of the most recent →Running transition (both the
-    // detector onReady path and the boot-timeout fallback set it), null until
+    // detector onReady path sets it), null until
     // running and after cleanup(). Drives the Home uptime readout. @Volatile:
     // set on the detector/timeout thread, read by the UI ticker on another.
     @Volatile private var _runningSinceMs: Long? = null
@@ -178,6 +180,7 @@ class AvfEngine @Inject constructor(
     val ctrlSockPath: String get() = "${context.filesDir.absolutePath}/avf-ctrl.sock"
 
     private val detector = BootStageDetector(_bootStage, _state) {
+        PersistentStorage.markReady(context.filesDir)
         // Detector already flipped _state to Running; stamp the uptime origin.
         _runningSinceMs = System.currentTimeMillis()
         Log.i(TAG, "boot Ready! detected — bridge connects via ConsoleFanout")
@@ -203,7 +206,7 @@ class AvfEngine @Inject constructor(
      * auto-injects SSH/X11/audio rules in-memory (never in DataStore) and
      * EngineHolder never sees them. addPortForward's putIfAbsent dedups the
      * parallel path. Idempotent (guarded on a null `control`) so the detector's
-     * onReady and the boot-timeout fallback can't both open a second channel.
+     * repeated readiness callbacks cannot open a second channel.
      */
     @Synchronized
     private fun bringUpControlChannel() {
@@ -372,22 +375,12 @@ class AvfEngine @Inject constructor(
             Log.i(TAG, "vm.run() returned — VM booting (status=$status)")
             spawnBridge()
 
-            // Boot-timeout fallback (mirrors QemuEngine): the engine leaves
-            // Starting only via the detector's "Ready!" or a VM callback. If a
-            // console quirk or a lost marker keeps both from firing, promote a
-            // still-Starting VM of THIS generation to Running and bring up the
-            // control channel (idempotent) so EngineHolder.trySwap can release
-            // and the bridge is wired. The generation/cleanedUp guard prevents
-            // promoting a VM that already stopped in the delay window.
+            // Log slow boots without inventing readiness; wait for Ready!.
             bootTimeoutJob = scope.launch {
                 kotlinx.coroutines.delay(BOOT_TIMEOUT_MS)
                 if (generation == vmGeneration && !cleanedUp.get() &&
                     _state.value is VmState.Starting) {
-                    Log.w(TAG, "AVF boot timeout — forcing Running state")
-                    _bootStage.value = "Ready"
-                    _runningSinceMs = System.currentTimeMillis()
-                    _state.value = VmState.Running
-                    bringUpControlChannel()
+                    Log.w(TAG, "Still waiting for the AVF guest Ready! marker")
                 }
             }
         } catch (e: Throwable) {
@@ -438,11 +431,18 @@ class AvfEngine @Inject constructor(
         }
         // Mark the stop as user-initiated so a resulting onStopped/onDied/onError
         // is mapped to Stopped (never downgraded to Error) by the funnel.
+        if (stopRequested) return
         stopRequested = true
         val generation = vmGeneration
         scope.launch {
             // Best-effort guest flush so unwritten ext4 data hits storage before
             // we kill the VM. Bounded so a hung guest can't block the stop.
+            if (control?.requestShutdown() == true) {
+                val deadline = android.os.SystemClock.elapsedRealtime() + 90_000
+                while (generation == vmGeneration && !cleanedUp.get() &&
+                    android.os.SystemClock.elapsedRealtime() < deadline) kotlinx.coroutines.delay(250)
+            }
+            if (generation != vmGeneration || cleanedUp.get()) return@launch
             runCatching { control?.syncAndWait(SYNC_TIMEOUT_MS) }
             if (generation != vmGeneration || cleanedUp.get()) return@launch
             // Surface (don't swallow) a framework stop() failure: if rejected the
@@ -642,22 +642,9 @@ class AvfEngine @Inject constructor(
      * as the guest writes blocks. Alpine's init formats it ext4 on first
      * boot via the standard initramfs path.
      */
-    private fun ensureStorageImage(storageSizeGb: Int): File {
-        val storageFile = File(context.filesDir, "storage.img")
-        val desiredBytes = storageSizeGb.toLong() * 1024L * 1024L * 1024L
-        if (storageFile.exists() && storageFile.length() == desiredBytes) return storageFile
-        if (storageFile.exists()) {
-            Log.d(TAG, "storage.img size mismatch — recreating")
-            storageFile.delete()
-        }
-        try {
-            java.io.RandomAccessFile(storageFile, "rw").use { it.setLength(desiredBytes) }
-            Log.d(TAG, "Created storage.img (${storageSizeGb}GB)")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to create storage.img", e)
-        }
-        return storageFile
-    }
+    private fun ensureStorageImage(storageSizeGb: Int): File =
+        PersistentStorage.ensure(context.filesDir, storageSizeGb.toLong() * 1024L * 1024L * 1024L)
+
 
     /**
      * crosvm requires the raw ARM64 Image (magic `ARM\x64` at offset 0x38), not
@@ -737,7 +724,7 @@ class AvfEngine @Inject constructor(
             "ratatoskr.cpu_total_compute=${config.ratatoskrCpuTotalCompute} " +
             "ratatoskr.memory_total_mb=${config.ratatoskrMemoryTotalMb} " +
             "ratatoskr.reserved_memory_mb=${config.ratatoskrReservedMemoryMb} " +
-            config.kernelExtraCmdline).trim()
+            config.kernelExtraCmdline + PersistentStorage.formatParameter(context.filesDir)).trim()
         AvfReflect.addParams(cb, resolvedCmdline)
         if (config.verboseLogging) {
             Log.i(TAG, "verbose: resolved cmdline = $resolvedCmdline")

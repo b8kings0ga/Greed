@@ -42,7 +42,7 @@ start() {
         if [ "$base" -gt "$applied" ] 2>/dev/null && [ "$base" -le "$current" ] 2>/dev/null; then
             echo "podroid-migrate: applying $base" > /dev/console
             sh "$MIGRATIONS_DIR/$base.sh" > /dev/console 2>&1 \
-                || echo "podroid-migrate: $base failed (continuing)" > /dev/console
+                || { eend 1 "migration $base failed; will retry on next boot"; return 1; }
         fi
     done
 

@@ -18,7 +18,7 @@ FROM alpine:3.23 AS builder
 ARG ALPINE_RELEASE=3.23.4
 ARG ALPINE_ARCH=aarch64
 
-RUN apk add --no-cache curl squashfs-tools tar openssl libcap-utils
+RUN apk add --no-cache curl squashfs-tools tar zstd openssl libcap-utils
 
 WORKDIR /work
 RUN curl -L -o minirootfs.tar.gz \
@@ -26,6 +26,11 @@ RUN curl -L -o minirootfs.tar.gz \
  && mkdir rootfs \
  && tar -xzf minirootfs.tar.gz -C rootfs \
  && rm minirootfs.tar.gz
+
+# Package installation is independent of runtime binaries and service edits.
+ENV ALPINE_VERSION=${ALPINE_RELEASE}
+COPY install-packages.sh /work/install-packages.sh
+RUN sh /work/install-packages.sh
 
 # Pull in the vsock-agent binary built in stage 1.
 COPY --from=vsock-builder /work/vsock-agent/podroid-vsock-agent /work/rootfs/usr/local/bin/podroid-vsock-agent
@@ -35,13 +40,15 @@ COPY --from=vsock-builder /work/overlay-normalize/podroid-overlay-normalize /wor
 ARG SYSTEM_VERSION=0
 ENV SYSTEM_VERSION=${SYSTEM_VERSION}
 
-ENV ALPINE_VERSION=${ALPINE_RELEASE}
 COPY files /work/files
 COPY build-rootfs.sh /work/build-rootfs.sh
 RUN chmod +x /work/build-rootfs.sh && /work/build-rootfs.sh
 
-RUN mksquashfs /work/rootfs /work/alpine-rootfs.squashfs \
-    -comp zstd -Xcompression-level 19 -all-root -noappend
+RUN ln -sf /opt/mim/runtime/bin/bun /work/rootfs/usr/local/bin/bun \
+ && ln -sf /opt/mim/runtime/bin/uv /work/rootfs/usr/local/bin/uv \
+ && ln -sf /opt/mim/runtime/bin/uvx /work/rootfs/usr/local/bin/uvx \
+ && mksquashfs /work/rootfs /work/alpine-rootfs.squashfs \
+    -comp zstd -Xcompression-level 15 -processors 4 -all-root -root-mode 0755 -noappend
 # (No -no-xattrs: rootless podman's newuidmap/newgidmap need their
 # file capabilities preserved; they're stored as security.capability xattr.)
 

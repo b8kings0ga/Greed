@@ -36,7 +36,15 @@ done
 #   guest's flushes reach storage.img through QEMU's writeback cache, which
 #   honors flushes, keeping the on-disk journal consistent for recovery.
 if ! mount -t ext4 -o rw,noatime,commit=1,barrier=1 /dev/vda /mnt/persist 2>/dev/null; then
-    e2fsck -y /dev/vda >/dev/null 2>&1 || mkfs.ext4 -q -F /dev/vda
+    # Only a disk newly created by Android may be formatted. A failed repair
+    # of existing user storage must remain recoverable, never trigger mkfs.
+    if grep -qw 'podroid\.storage\.new=1' /proc/cmdline && ! blkid /dev/vda >/dev/null 2>&1; then
+        mkfs.ext4 -q -F /dev/vda
+    else
+        repair=0
+        e2fsck -p /dev/vda > /dev/console 2>&1 || repair=$?
+        [ "$repair" -le 2 ] || { echo "FATAL: storage repair failed; data preserved" > /dev/console; exec sh; }
+    fi
     mount -t ext4 -o rw,noatime,commit=1,barrier=1 /dev/vda /mnt/persist \
         || { echo "FATAL: persistent ext4 (/dev/vda) mount failed" > /dev/console; ls -l /dev/vd* > /dev/console 2>&1; exec sh; }
 fi

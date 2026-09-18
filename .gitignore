@@ -86,3 +86,9 @@ app/src/main/jniLibs/
 
 # Visual companion (brainstorming sessions)
 .superpowers/
+
+build-rootfs/files/opt/podroid/assets/ratatoskr-native.tar.zst
+/.ratatoskr-native-source.sha
+
+/build-rootfs/files/usr/local/bin/podroid-node-name
+/build-rootfs/files/usr/local/bin/podroid-node-offline

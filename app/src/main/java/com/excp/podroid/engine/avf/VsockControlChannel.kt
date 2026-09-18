@@ -169,6 +169,11 @@ class VsockControlChannel(
         }
     }
 
+    @Synchronized fun requestShutdown(): Boolean {
+        val w = writer ?: return false
+        return !closed && writeLine(w, "SHUTDOWN")
+    }
+
     fun sendResize(rows: Int, cols: Int)             = sendOrQueue("RESIZE $rows $cols")
     fun addForward(vport: Int, proto: String, host: String, gport: Int) = sendOrQueue("ADD $vport $proto $host $gport")
     fun removeForward(vport: Int)                    = sendOrQueue("REMOVE $vport")

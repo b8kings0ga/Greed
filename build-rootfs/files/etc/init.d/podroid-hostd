@@ -1,5 +1,5 @@
 #!/sbin/openrc-run
-description="Podroid guest -> Android host bridge (notify/forward)"
+description="Podroid guest <-> Android host bridge (notify/forward/sense)"
 pidfile="/run/podroid-hostd.pid"
 
 depend() {

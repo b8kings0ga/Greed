@@ -1,0 +1,25 @@
+#!/sbin/openrc-run
+description="Mimir scheduler agent (Nomad)"
+command="/usr/local/bin/nomad"
+command_args="agent -config=/opt/nomad/config/nomad.hcl"
+pidfile="/run/nomad.pid"
+supervisor="supervise-daemon"
+respawn_delay=5
+respawn_max=0
+respawn_period=120
+output_log="/var/log/nomad.log"
+error_log="/var/log/nomad.log"
+
+depend() {
+    need podroid-network
+    after podroid-migrate
+}
+
+start_pre() {
+    # Ratatoskr generates this file before asking OpenRC to start Nomad.
+    # Never create a fresh data directory: the persisted client-id is the
+    # authority for this device's existing Nomad identity.
+    test -s /opt/nomad/config/nomad.hcl &&
+        test -x /usr/local/bin/nomad &&
+        test -d /opt/nomad/data
+}

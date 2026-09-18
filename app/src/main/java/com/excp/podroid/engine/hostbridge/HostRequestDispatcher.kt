@@ -23,6 +23,7 @@ class HostRequestDispatcher(
     private val camera: suspend (String) -> String,
     private val location: suspend (String) -> String,
     private val microphone: suspend (String) -> String,
+    private val nfc: suspend (String) -> String,
 ) {
     private val validProtocols = setOf("tcp", "udp")
 
@@ -44,6 +45,7 @@ class HostRequestDispatcher(
                 "CAMERA" -> handleCamera(parts)
                 "LOCATION" -> handleLocation(parts)
                 "MICROPHONE" -> handleMicrophone(parts)
+                "NFC" -> handleNfc(parts)
                 "PING" -> "PONG"
                 else -> HostProtocol.err("bad request")
             }
@@ -158,5 +160,32 @@ class HostRequestDispatcher(
         }
         if (p[1] != "lazy" && p.size != 2) return HostProtocol.err("bad request")
         return microphone(p.drop(1).joinToString(" "))
+    }
+
+    // NFC <status|current|next> [opaque-cursor|-]
+    // `next` is deliberately non-blocking: the bridge is serialized and a
+    // long-poll would stall every other guest -> Android capability.
+    private suspend fun handleNfc(p: List<String>): String {
+        if (p.size !in 2..3) return HostProtocol.err("bad request")
+        return when (p[1]) {
+            "status", "current" -> {
+                if (p.size != 2) return HostProtocol.err("bad request")
+                nfc(p[1])
+            }
+            "next" -> {
+                val cursor = if (p.size == 3) p[2] else "-"
+                if (cursor.isBlank() || cursor.length > MAX_NFC_CURSOR_LENGTH ||
+                    cursor.any { !(it.isLetterOrDigit() || it in "-:._") }
+                ) {
+                    return HostProtocol.err("invalid cursor")
+                }
+                nfc("next $cursor")
+            }
+            else -> HostProtocol.err("usage: status|current|next [cursor]")
+        }
+    }
+
+    companion object {
+        private const val MAX_NFC_CURSOR_LENGTH = 128
     }
 }

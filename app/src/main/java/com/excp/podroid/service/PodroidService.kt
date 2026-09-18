@@ -9,6 +9,7 @@ package com.excp.podroid.service
 
 import android.Manifest
 import android.annotation.SuppressLint
+import com.excp.podroid.x11.X11Constants
 import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
@@ -53,9 +54,11 @@ class PodroidService : Service() {
     @Inject lateinit var cameraStreamManager: com.excp.podroid.engine.hostbridge.camera.CameraStreamManager
     @Inject lateinit var locationSenseManager: com.excp.podroid.engine.hostbridge.location.LocationSenseManager
     @Inject lateinit var microphoneStreamManager: com.excp.podroid.engine.hostbridge.microphone.MicrophoneStreamManager
+    @Inject lateinit var nfcReaderManager: com.excp.podroid.engine.hostbridge.nfc.NfcReaderManager
     private var hostRequestServer: com.excp.podroid.engine.hostbridge.HostRequestServer? = null
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    @Volatile private var stopRequested = false
     private var notificationJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -73,6 +76,7 @@ class PodroidService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
+                if (stopRequested) return START_NOT_STICKY
                 // Android 14+ (API 34) requires the foregroundServiceType argument
                 // when the manifest declares foregroundServiceType="specialUse";
                 // otherwise Android throws MissingForegroundServiceTypeException.
@@ -113,15 +117,15 @@ class PodroidService : Service() {
                 }
             }
             ACTION_STOP -> {
+                stopRequested = true
                 val wasActive = engine.state.value is VmState.Starting ||
                     engine.state.value is VmState.Running
                 engine.stop()
                 if (wasActive) {
-                    // engine.stop() kicks off an async best-effort guest flush
-                    // (AVF syncAndWait, up to 8s) on the engine's own scope and
-                    // returns immediately. Releasing the partial WakeLock here
-                    // would let the CPU suspend mid-flush with the screen off,
-                    // defeating the deliberate ext4 sync. Keep it held; the
+                    // engine.stop() starts asynchronous guest poweroff and returns
+                    // immediately. Releasing the partial WakeLock here would let
+                    // the CPU suspend during node-offline notification or ext4
+                    // unmounts with the screen off. Keep it held; the
                     // shutdown observer runs teardown() (release + stopSelf) once
                     // the engine reaches Stopped/Error.
                     Log.d(TAG, "ACTION_STOP: VM active — deferring teardown to state observer")
@@ -148,7 +152,9 @@ class PodroidService : Service() {
         super.onDestroy()
         notificationJob?.cancel()
         hostRequestServer?.stop()
+        nfcReaderManager.endVmSession()
         cameraStreamManager.stop()
+        microphoneStreamManager.stop()
         usbPassthroughManager.stop()
         releaseWakeLock()
         serviceScope.cancel()
@@ -156,14 +162,9 @@ class PodroidService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        // App swiped from recents — stop the VM gracefully and tear the service
-        // down unconditionally. engine.stop() is a no-op if idle; doing this even
-        // in the Idle-before-Starting window prevents a swipe during early start
-        // from leaving a VM that starts with no UI, holding the WakeLock.
-        engine.stop()
-        releaseWakeLock()
-        stopForegroundCompat()
-        stopSelf()
+        // Reuse normal shutdown; do not cancel the boot/shutdown observer or
+        // release the wakelock before OpenRC has taken Nomad offline.
+        onStartCommand(Intent(this, PodroidService::class.java).apply { action = ACTION_STOP }, 0, 0)
     }
 
     private fun acquireWakeLock() {
@@ -295,6 +296,7 @@ class PodroidService : Service() {
             camera = { handleCameraRequest(it) },
             location = { handleLocationRequest(it) },
             microphone = { handleMicrophoneRequest(it) },
+            nfc = { handleNfcRequest(it) },
         )
         return com.excp.podroid.engine.hostbridge.HostRequestServer(
             openTransport = { engine.openHostTransport() },
@@ -307,9 +309,13 @@ class PodroidService : Service() {
     private suspend fun observeStateForHostBridge() {
         engine.state.collect { state ->
             when (state) {
-                is VmState.Starting, is VmState.Running -> ensureHostBridge().start()
+                is VmState.Starting, is VmState.Running -> {
+                    nfcReaderManager.beginVmSession()
+                    ensureHostBridge().start()
+                }
                 is VmState.Stopped, is VmState.Idle, is VmState.Error -> {
                     hostRequestServer?.stop()
+                    nfcReaderManager.endVmSession()
                     // Drop server mode so the black overlay doesn't linger over a
                     // stopped/crashed VM with no indication it died.
                     headlessModeManager.setActive(false)
@@ -329,6 +335,7 @@ class PodroidService : Service() {
                     // we MUST block here until extraction has fully completed or
                     // the VM could launch against a partial/missing file.
                     (application as? PodroidApplication)?.awaitAssetsReady()
+                    if (stopRequested) return@withContext
                     cameraStreamManager.ensureServerStarted()
                     microphoneStreamManager.ensureServerStarted()
 
@@ -379,6 +386,7 @@ class PodroidService : Service() {
                     if (config.usbPassthroughEnabled) {
                         serviceScope.launch { observeStateForUsb() }
                     }
+                    if (stopRequested) return@withContext
                     engine.start(rules, config)
                 } catch (e: Exception) {
                     Log.e(TAG, "QEMU failed to start", e)
@@ -459,23 +467,26 @@ class PodroidService : Service() {
         val nomadReservedMemoryMb: Int,
     )
 
-    private fun detectMaxVmResources(): AutoVmResources {
-        val cpus = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+    private suspend fun detectMaxVmResources(): AutoVmResources {
         val am = getSystemService(ActivityManager::class.java)
         val mi = ActivityManager.MemoryInfo()
         am.getMemoryInfo(mi)
 
         val totalMb = (mi.totalMem / (1024L * 1024L)).toInt().coerceAtLeast(512)
-        val hostReserveMb = maxOf(1536, totalMb / 8)
-        val vmRamMb = minOf(8192, totalMb - hostReserveMb).coerceAtLeast(512)
+        val resources = com.excp.podroid.engine.VmResourcePolicy.resolve(
+            totalMb, Runtime.getRuntime().availableProcessors(),
+            settingsRepository.getVmMaxResourcesSnapshot(),
+            settingsRepository.getVmRamMbSnapshot(), settingsRepository.getVmCpusSnapshot(),
+        )
+        val cpus = resources.cpus
+        val vmRamMb = resources.ramMb
         val nomadReservedMb = minOf(512, maxOf(128, vmRamMb / 8))
-        val nomadMemoryMb = (vmRamMb - nomadReservedMb).coerceAtLeast(256)
 
         return AutoVmResources(
             cpus = cpus,
             ramMb = vmRamMb,
             nomadCpuTotalCompute = cpus * 1000,
-            nomadMemoryTotalMb = nomadMemoryMb,
+            nomadMemoryTotalMb = vmRamMb,
             nomadReservedMemoryMb = nomadReservedMb,
         )
     }
@@ -546,6 +557,16 @@ class PodroidService : Service() {
         }
     }
 
+    private fun handleNfcRequest(action: String): String {
+        val parts = action.split(" ", limit = 2)
+        return when (parts[0]) {
+            "status" -> nfcReaderManager.status()
+            "current" -> nfcReaderManager.current()
+            "next" -> nfcReaderManager.next(parts.getOrElse(1) { "-" })
+            else -> com.excp.podroid.engine.hostbridge.HostProtocol.err("usage: status|current|next [cursor]")
+        }
+    }
+
     // Reply returned now; the stop/restart is posted to the main looper so the
     // bridge flushes the response before the VM (and this service) tear down. The
     // Handler callbacks capture the app-scoped engine + applicationContext (NOT
@@ -589,9 +610,8 @@ class PodroidService : Service() {
                     val terminal = s is VmState.Stopped || s is VmState.Error
                     when {
                         terminal -> PodroidService.start(ctx)
-                        tries++ >= 40 -> {
-                            Log.w(TAG, "restart: VM did not reach a stopped state in time (state=$s); starting anyway")
-                            PodroidService.start(ctx)
+                        tries++ >= 640 -> {
+                            Log.w(TAG, "restart: VM did not stop in time (state=$s); restart cancelled")
                         }
                         else -> main.postDelayed(this, 250)
                     }

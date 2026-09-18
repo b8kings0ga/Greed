@@ -12,6 +12,7 @@ import com.excp.podroid.util.NetworkUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
@@ -81,7 +82,7 @@ class LauncherViewModel @Inject constructor(
     fun restartVm() {
         PodroidService.stop(context)
         viewModelScope.launch {
-            val reached = withTimeoutOrNull(10_000) {
+            val reached = withTimeoutOrNull(165_000) {
                 engine.state.first { state ->
                     state is VmState.Stopped || state is VmState.Idle || state is VmState.Error
                 }
@@ -92,7 +93,12 @@ class LauncherViewModel @Inject constructor(
         }
     }
 
-    val phoneIp: String by lazy { NetworkUtils.localIpv4(context) }
+    val phoneIp: String get() = NetworkUtils.localIpv4(context)
+
+    val resourcesLabel: StateFlow<String> = combine(
+        settingsRepository.vmRamMb, settingsRepository.vmCpus, settingsRepository.vmMaxResources,
+    ) { ram, cpus, maximum -> autoResourcesLabel(ram, cpus, maximum) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
 
     fun sshCommand(): String? {
         if (!sshEnabled.value) return null
@@ -119,15 +125,17 @@ class LauncherViewModel @Inject constructor(
         }
     }
 
-    fun autoResourcesLabel(): String {
-        val cpus = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+    private fun autoResourcesLabel(requestedRamMb: Int, requestedCpus: Int, maximum: Boolean): String {
         val am = context.getSystemService(ActivityManager::class.java)
         val mi = ActivityManager.MemoryInfo()
         am.getMemoryInfo(mi)
         val totalMb = (mi.totalMem / (1024L * 1024L)).toInt().coerceAtLeast(512)
-        val hostReserveMb = maxOf(1536, totalMb / 8)
-        val ramMb = minOf(8192, totalMb - hostReserveMb).coerceAtLeast(512)
-        val ramLabel = if (ramMb >= 1024) "${ramMb / 1024} GB" else "$ramMb MB"
+        val resources = com.excp.podroid.engine.VmResourcePolicy.resolve(
+            totalMb, Runtime.getRuntime().availableProcessors(), maximum, requestedRamMb, requestedCpus,
+        )
+        val cpus = resources.cpus
+        val ramMb = resources.ramMb
+        val ramLabel = "$ramMb MB"
         return "$ramLabel · $cpus CPU"
     }
 

@@ -45,6 +45,7 @@ class SettingsRepository @Inject constructor(
 
     companion object {
         val KEY_DARK_THEME             = booleanPreferencesKey("dark_theme")
+        val KEY_VM_MAX = booleanPreferencesKey("vm_max_resources")
         val KEY_VM_RAM                 = intPreferencesKey("vm_ram_mb")
         val KEY_VM_CPUS                = intPreferencesKey("vm_cpus")
         val KEY_FONT_SIZE              = intPreferencesKey("terminal_font_size")
@@ -123,7 +124,10 @@ class SettingsRepository @Inject constructor(
         context.dataStore.edit { it[key] = value }
 
     val darkTheme            = pref(KEY_DARK_THEME, true)
-    val vmRamMb              = pref(KEY_VM_RAM, 512)
+    val vmMaxResources = pref(KEY_VM_MAX, true)
+    suspend fun setVmMaxResources(value: Boolean) = set(KEY_VM_MAX, value)
+    suspend fun getVmMaxResourcesSnapshot() = vmMaxResources.first()
+    val vmRamMb              = pref(KEY_VM_RAM, 2048)
     // 2 vCPUs lets multi-threaded TCG (`thread=multi`) actually schedule
     // across two host threads. With 1 vCPU the accel falls back to
     // single-thread translation regardless of the flag, so most CPU-bound

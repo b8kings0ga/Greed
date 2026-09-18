@@ -2,53 +2,6 @@
 set -eu
 ROOTFS=/work/rootfs
 
-# ALPINE_VERSION comes from the Dockerfile ENV (full release like 3.23.4).
-# Strip the patch component to get the major branch (e.g. 3.23) used in repo URLs.
-: "${ALPINE_VERSION:?ALPINE_VERSION must be set (e.g. 3.23.4)}"
-ALPINE_BRANCH="${ALPINE_VERSION%.*}"
-
-mkdir -p "$ROOTFS/etc/apk"
-cat > "$ROOTFS/etc/apk/repositories" <<EOF
-https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_BRANCH}/main
-https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_BRANCH}/community
-EOF
-
-apk -X "https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_BRANCH}/main" \
-    -X "https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_BRANCH}/community" \
-    -U --allow-untrusted --root "$ROOTFS" --initdb add \
-    alpine-base \
-    openrc \
-    busybox-openrc \
-    bash \
-    podman \
-    docker docker-openrc docker-cli-compose \
-    lxc lxc-templates lxc-download lxc-openrc lxc-bridge \
-    crun \
-    fuse-overlayfs \
-    iptables \
-    ip6tables \
-    nftables \
-    bridge-utils \
-    iproute2 \
-    dropbear dropbear-openrc \
-    curl \
-    ca-certificates \
-    shadow shadow-uidmap \
-    slirp4netns \
-    aardvark-dns netavark \
-    libcap-utils \
-    doas sudo \
-    gcompat \
-    gzip \
-    zstd \
-    xz \
-    tigervnc \
-    pulseaudio \
-    pulseaudio-utils \
-    font-misc-misc \
-    font-cursor-misc \
-    ttf-dejavu
-
 # Apply file capabilities to newuidmap/newgidmap. apk's package install often
 # does this, but we set them explicitly so the squashfs ships with the
 # correct security.capability xattr (preserved by mksquashfs without -no-xattrs).
@@ -107,7 +60,11 @@ cp /work/files/etc/init.d/podroid-vsock     "$ROOTFS/etc/init.d/"
 cp /work/files/etc/init.d/podroid-hostd     "$ROOTFS/etc/init.d/"
 cp /work/files/etc/init.d/podroid-migrate   "$ROOTFS/etc/init.d/"
 cp /work/files/etc/init.d/podroid-ratatoskr "$ROOTFS/etc/init.d/"
+cp /work/files/etc/init.d/nomad "$ROOTFS/etc/init.d/"
+cp /work/files/etc/init.d/mim-maintenance "$ROOTFS/etc/init.d/"
 chmod +x "$ROOTFS/etc/init.d/podroid-"*
+chmod +x "$ROOTFS/etc/init.d/nomad"
+chmod +x "$ROOTFS/etc/init.d/mim-maintenance"
 
 # Copy /usr/local/bin scripts (resize daemon + login wrapper + getty selector)
 mkdir -p "$ROOTFS/usr/local/bin"
@@ -138,20 +95,21 @@ ln -sf ../local/bin/podroid-camera-gallery "$ROOTFS/usr/bin/podroid-camera-galle
 chmod +x "$ROOTFS/usr/local/bin/podroid-"*
 mkdir -p "$ROOTFS/etc/conf.d"
 cp /work/files/etc/conf.d/podroid "$ROOTFS/etc/conf.d/"
-# Ratatoskr defaults and required embedded image payload.
-mkdir -p "$ROOTFS/etc/ratatoskr" "$ROOTFS/opt/podroid/assets"
-cp /work/files/etc/ratatoskr/env "$ROOTFS/etc/ratatoskr/env"
-chmod 0644 "$ROOTFS/etc/ratatoskr/env"
-cp /work/files/opt/podroid/assets/ratatoskr-debug-image.tar.zst \
-    "$ROOTFS/opt/podroid/assets/ratatoskr-debug-image.tar.zst"
-chmod 0644 "$ROOTFS/opt/podroid/assets/ratatoskr-debug-image.tar.zst"
+# Native runtime, independent of the optional Docker daemon.
+mkdir -p "$ROOTFS/etc/ratatoskr"
+cp /work/files/etc/ratatoskr/* "$ROOTFS/etc/ratatoskr/"
+tar --zstd -xf /work/files/opt/podroid/assets/ratatoskr-native.tar.zst -C "$ROOTFS"
+cp /work/files/usr/local/bin/podroid-ratatoskr-run /work/files/usr/local/bin/podroid-node-name /work/files/usr/local/bin/podroid-node-offline "$ROOTFS/usr/local/bin/"
+chmod 0755 "$ROOTFS/usr/local/bin/podroid-ratatoskr-run"
+cp /work/files/usr/local/bin/mim-maintenance-worker "$ROOTFS/usr/local/bin/"
+chmod 0755 "$ROOTFS/usr/local/bin/mim-maintenance-worker"
 # vsock agent's initial forward table (read at podroid-vsock startup).
 mkdir -p "$ROOTFS/etc/podroid"
 cp /work/files/etc/podroid/forwards.conf "$ROOTFS/etc/podroid/forwards.conf"
 chmod 0644 "$ROOTFS/etc/podroid/forwards.conf"
 # Migration scripts dir (seeded with its README; per-version <v>.sh added over time).
 mkdir -p "$ROOTFS/etc/podroid/migrations"
-cp /work/files/etc/podroid/migrations/README "$ROOTFS/etc/podroid/migrations/README"
+cp /work/files/etc/podroid/migrations/* "$ROOTFS/etc/podroid/migrations/"
 # System-version stamp: the migration anchor. Baked from the app versionCode at
 # build time; compared against /mnt/persist/.podroid/applied-version at boot.
 printf '%s\n' "${SYSTEM_VERSION:-0}" > "$ROOTFS/etc/podroid/system-version"
@@ -200,7 +158,7 @@ mkdir -p "$ROOTFS/etc/runlevels/default" "$ROOTFS/etc/runlevels/boot"
 # Guard each link: a dangling symlink (e.g. dnsmasq.lxcbr0, which lxc-bridge
 # may ship only as dnsmasq config and not an init script) makes OpenRC log
 # an error every boot and stalls podroid-ready's `after *` on a phantom.
-for svc in podroid-migrate podroid-bootstrap podroid-network podroid-resize dropbear docker lxc dnsmasq.lxcbr0 podroid-x11 podroid-vsock podroid-hostd podroid-ratatoskr podroid-ready; do
+for svc in acpid podroid-migrate podroid-bootstrap podroid-network podroid-resize dropbear lxc dnsmasq.lxcbr0 podroid-x11 podroid-vsock podroid-hostd mim-maintenance podroid-ratatoskr podroid-ready; do
     if [ -e "$ROOTFS/etc/init.d/$svc" ]; then
         ln -sf "/etc/init.d/$svc" "$ROOTFS/etc/runlevels/default/$svc"
     else

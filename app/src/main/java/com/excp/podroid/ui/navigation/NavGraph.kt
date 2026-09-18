@@ -28,6 +28,8 @@ fun PodroidNavGraph(
         startDestination = startDestination,
     ) {
         composable(Routes.LAUNCHER) {
+            val activity = LocalActivity.current
+            androidx.activity.compose.BackHandler { activity?.finishAndRemoveTask() }
             LauncherScreen(
                 windowSizeClass = windowSizeClass,
                 onNavigateToSettings = {

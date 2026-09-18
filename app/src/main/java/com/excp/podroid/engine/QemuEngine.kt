@@ -68,8 +68,8 @@ class QemuEngine @Inject constructor(
 
     /**
      * Wall-clock millis at which this VM reached Running, or null when not
-     * running. Set on every →Running transition (BootStageDetector's onReady
-     * and the 60s boot-timeout fallback) and cleared in cleanup(); read by the
+     * running. Set by BootStageDetector's genuine onReady callback and cleared
+     * in cleanup(); read by the
      * UI uptime readout via the [VmEngine] override.
      */
     @Volatile
@@ -121,6 +121,7 @@ class QemuEngine @Inject constructor(
     private var bootMonitor: QemuBootMonitor? = null
 
     private val bootStageDetector = BootStageDetector(_bootStage, _state) {
+        PersistentStorage.markReady(context.filesDir)
         // BootStageDetector has already flipped _state to Running by the time
         // this onReady fires; stamp the uptime origin to match.
         _runningSinceMs = System.currentTimeMillis()
@@ -258,6 +259,8 @@ class QemuEngine @Inject constructor(
                 return
             }
             cleanedUp.set(false)
+            stopRequested.set(false)
+            stopWorker.set(false)
             bootStartTime = System.currentTimeMillis()
             _state.value = VmState.Starting
         }
@@ -310,6 +313,7 @@ class QemuEngine @Inject constructor(
 
             val proc = withContext(dispatcher) { pb.start() }
             process = proc
+            if (stopRequested.get()) stop()
             _bootStage.value = "Booting kernel..."
 
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -369,22 +373,12 @@ class QemuEngine @Inject constructor(
                     VmState.Error("QEMU failed to create sockets within ${SOCKET_READY_TIMEOUT_MS / 1000}s")
                 proc.destroy()
             } else {
-                // Primary readiness is the detector's "Ready!" (now reliable).
-                // This is only a safety net so the UI never strands in Starting:
-                // generous enough to clear a worst-case first boot (~56s, dropbear
-                // hostkey gen), and it logs loudly instead of silently rubber-
-                // stamping Running at a fixed 60s like the old blind fallback.
+                // A live process is not proof that the guest booted. The serial
+                // detector alone can transition to Running, even on slow boots.
                 scope.launch {
                     delay(BOOT_READY_SAFETY_MS)
-                    if (_state.value is VmState.Starting &&
-                        process?.isAlive == true && !cleanedUp.get()) {
-                        Log.w(TAG, "Ready! not detected within ${BOOT_READY_SAFETY_MS / 1000}s - " +
-                            "promoting to Running (boot detection may have missed the marker)")
-                        _bootStage.value = "Ready"
-                        persistBootDuration()
-                        _runningSinceMs = System.currentTimeMillis()
-                        _state.value = VmState.Running
-                        autoStartBridge()
+                    if (_state.value is VmState.Starting && process?.isAlive == true) {
+                        Log.w(TAG, "Still waiting for the guest Ready! marker")
                     }
                 }
             }
@@ -423,27 +417,34 @@ class QemuEngine @Inject constructor(
 
 
     /**
-     * Signal the VM to stop. Destroys the QEMU process; the start() coroutine's
+     * Request guest poweroff; force termination only after a bounded timeout. The start() coroutine's
      * proc.waitFor() will fall through and run cleanup() + set the final state.
      * Avoids the historical race where stop() and the start() exit-path both
      * called cleanup() concurrently and fought over _state.value.
      */
+    private val stopRequested = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val stopWorker = java.util.concurrent.atomic.AtomicBoolean(false)
+
     override fun stop() {
+        stopRequested.set(true)
         val proc = process ?: return
-        // Issue the graceful SIGTERM immediately (non-blocking), then run the
-        // graceful-wait → forceful-escalation off the caller's thread. stop() is
-        // called from PodroidService on the main thread, so blocking up to ~5s
-        // in waitFor() here risks an ANR under TCG load. The dedicated
-        // qemuDispatcher thread already performs the final waitFor() reap in
-        // start(), which drives cleanup() and the →Stopped transition.
-        proc.destroy()
+        if (!stopWorker.compareAndSet(false, true)) return
         Thread({
             try {
-                if (!proc.waitFor(3, TimeUnit.SECONDS)) {
-                    proc.destroyForcibly()
-                    proc.waitFor(2, TimeUnit.SECONDS)
-                }
-            } catch (_: Exception) {
+                // Let a starting guest install its power-button listener before
+                // requesting shutdown. Keep the service/wakelock alive throughout.
+                val bootDeadline = System.currentTimeMillis() + 60_000
+                while (proc.isAlive && _state.value is VmState.Starting &&
+                    System.currentTimeMillis() < bootDeadline) Thread.sleep(250)
+                if (!proc.isAlive) return@Thread
+                val requested = runBlocking { qmpClient?.execute("system_powerdown")?.isSuccess == true }
+                Log.i(TAG, "Guest poweroff requested=$requested")
+                if (requested && proc.waitFor(90, TimeUnit.SECONDS)) return@Thread
+                Log.w(TAG, "Guest shutdown unavailable or timed out; terminating QEMU")
+                proc.destroy()
+                if (!proc.waitFor(3, TimeUnit.SECONDS)) proc.destroyForcibly()
+            } catch (e: Exception) {
+                Log.w(TAG, "Guest shutdown failed", e)
                 proc.destroyForcibly()
             }
         }, "podroid-qemu-stop").apply { isDaemon = true }.start()
@@ -522,6 +523,7 @@ class QemuEngine @Inject constructor(
             val cmdline = buildString {
                 // mitigations=off: speculative-exec attacks don't cross the TCG ISA boundary; 5–15% gain.
                 append("console=ttyAMA0 mitigations=off")
+                append(PersistentStorage.formatParameter(context.filesDir))
                 if (userKernelExtras.isNotEmpty()) append(" ").append(userKernelExtras)
                 append(" androidip=").append(config.androidIp)
                 if (config.sshEnabled) append(" ssh=1")
@@ -648,40 +650,7 @@ class QemuEngine @Inject constructor(
     }
 
     private fun ensureStorageImage(storageSizeGb: Int) {
-        val storageFile = File(context.filesDir, "storage.img")
-        val desiredBytes = storageSizeGb.toLong() * 1024L * 1024L * 1024L
-
-        if (storageFile.exists()) {
-            val current = storageFile.length()
-            when {
-                current == desiredBytes -> return
-                // NEVER delete: storage.img is the persistent ext4 overlay (every
-                // apk add, container, user file). Deleting on mismatch could wipe
-                // all guest data if the size ever changes (a corrupted DataStore
-                // falling back to the 2GB default, or a future resize UI). Grow in
-                // place when larger — the guest's first-boot resize2fs claims the
-                // new space; truncating to shrink would corrupt the filesystem.
-                desiredBytes > current -> {
-                    runCatching {
-                        java.io.RandomAccessFile(storageFile, "rw").use { it.setLength(desiredBytes) }
-                    }.onSuccess {
-                        Log.i(TAG, "storage.img grown ${current / (1024 * 1024)}MB → ${storageSizeGb}GB (guest resize2fs on next boot)")
-                    }.onFailure { Log.e(TAG, "Failed to grow storage.img", it) }
-                    return
-                }
-                else -> {
-                    Log.w(TAG, "storage.img (${current / (1024 * 1024)}MB) larger than requested ${storageSizeGb}GB; keeping existing image (shrink would corrupt the filesystem)")
-                    return
-                }
-            }
-        }
-
-        try {
-            java.io.RandomAccessFile(storageFile, "rw").use { it.setLength(desiredBytes) }
-            Log.d(TAG, "Created storage.img (${storageSizeGb}GB)")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to create storage.img", e)
-        }
+        PersistentStorage.ensure(context.filesDir, storageSizeGb.toLong() * 1024L * 1024L * 1024L)
     }
 
     private fun qemuExecutable(): File? {

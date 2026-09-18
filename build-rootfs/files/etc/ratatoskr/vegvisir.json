@@ -1,0 +1,38 @@
+{
+  "version": 2,
+  "network": "mimir",
+  "generated_at": "2026-09-02T20:15:53.244761Z",
+  "regions": {
+    "local": {
+      "northstar": "uslax-star0",
+      "nomad_servers": [
+        {
+          "slot": 1,
+          "name": "uslax-star0",
+          "yggdrasil_ip": "200:5767:9845:66c:ab1:874e:7653:46a5",
+          "yggdrasil_public_key": "d44c33dd7cc9faa73c58c4d65cad129e287e45f5873df794a5eda411f199ede2",
+          "yggdrasil_peers": [
+            "tcp://107.172.111.190:14444"
+          ],
+          "nomad_rpc": "[200:5767:9845:66c:ab1:874e:7653:46a5]:14647",
+          "nats_url": ""
+        }
+      ],
+      "nats_servers": [
+        {
+          "slot": 1,
+          "name": "uslax-star0",
+          "yggdrasil_ip": "200:5767:9845:66c:ab1:874e:7653:46a5",
+          "yggdrasil_public_key": "d44c33dd7cc9faa73c58c4d65cad129e287e45f5873df794a5eda411f199ede2",
+          "yggdrasil_peers": [
+            "tcp://107.172.111.190:14444"
+          ],
+          "nomad_rpc": "",
+          "nats_url": "nats://[200:5767:9845:66c:ab1:874e:7653:46a5]:14222",
+          "nats_leaf": "nats://[200:5767:9845:66c:ab1:874e:7653:46a5]:7422"
+        }
+      ]
+    }
+  },
+  "public_peers": null
+}

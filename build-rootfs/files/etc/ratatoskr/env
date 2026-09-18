@@ -1,25 +1,36 @@
-# Ratatoskr deployment defaults. This file is parsed by podroid-ratatoskr and
-# also filtered into a Docker --env-file, so CONF_* keys may contain dots.
-#
-# Android passes auto-detected CPU and memory values on the kernel cmdline.
-# Override values here only for debugging or when intentionally pinning a node.
+# Native Mimir environment; literal KEY=VALUE lines, not shell syntax.
 
-RATATOSKR_IMAGE=b8kings0ga/ratatoskr-debug:latest
-RATATOSKR_CONTAINER=ratatoskr
-RATATOSKR_ROLE=client
-RATATOSKR_MODE=megin
 
 CONF_bark.paths.nomad_data_dir=/var/lib/ratatoskr/nomad
 CONF_nomad.data_dir=/var/lib/ratatoskr/nomad
 CONF_bark.yggdrasil_interface=tun0
 CONF_yggdrasil.if_name=tun0
 CONF_bark.dns.listen=["[::1]:53"]
-CONF_yggdrasil.peers=["tls://ygg8.mk16.de:1338?key=0000000b0683e38d8cb3085cfbf217edf0f0b2de76bb5ac7f02a94cd42a3fed9","tls://ygg4.mk16.de:1338?key=000000573433e11f23768b078bcdc10b42712a7b131d6d04b82042ffc0c97df0","tls://ygg3.mk16.de:1338?key=000003acdaf2a60e8de2f63c3e63b7e911d02380934f09ee5c83acb758f470c1"]
-CONF_nomad.client.server_join.retry_join=["[200:fd04:ce3c:3f3f:644:e82d:67a0:68a0]:14647","[200:35ef:7ec1:4ebb:2ce1:1fb6:28b6:dcda]:14647","[200:5ffd:d183:f650:9155:7ad5:3003:5ecf]:14647"]
-CONF_bark.identity.nats_urls=["nats://[200:fd04:ce3c:3f3f:644:e82d:67a0:68a0]:14222","nats://[200:35ef:7ec1:4ebb:2ce1:1fb6:28b6:dcda]:14222","nats://[200:5ffd:d183:f650:9155:7ad5:3003:5ecf]:14222"]
-CONF_bark.dns.nats_urls=["nats://[200:fd04:ce3c:3f3f:644:e82d:67a0:68a0]:14222","nats://[200:35ef:7ec1:4ebb:2ce1:1fb6:28b6:dcda]:14222","nats://[200:5ffd:d183:f650:9155:7ad5:3003:5ecf]:14222"]
+CONF_yggdrasil.peers=["tcp://107.172.111.190:14444"]
+CONF_nomad.client.server_join.retry_join=["[200:5767:9845:66c:ab1:874e:7653:46a5]:14647"]
+CONF_bark.identity.nats_urls=["nats://[200:5767:9845:66c:ab1:874e:7653:46a5]:14222"]
+CONF_bark.dns.nats_urls=["nats://[200:5767:9845:66c:ab1:874e:7653:46a5]:14222"]
 
-# Optional Ratatoskr config. Any CONF_* line is passed through to the container.
-# RATATOSKR_NODE_NAME=
-# RATATOSKR_VEGVISIR_SOURCES=
-# RATATOSKR_YGGDRASIL_PRIVATE_KEY=
+CONF_bark.paths.yggdrasil_config=/var/lib/ratatoskr/yggdrasil/yggdrasil.conf
+CONF_bark.docker_host.mode=disabled
+CONF_bark.docker_registry.configure_docker=false
+CONF_nomad.client.options={"driver.allowlist":"mimc,raw_exec,exec"}
+CONF_nomad.server.enabled=false
+CONF_bark.machine_preset=compact
+GOMEMLIMIT=512MiB
+GOMAXPROCS=2
+CONF_bark.vegvisir.enabled=true
+CONF_bark.vegvisir.file=/etc/ratatoskr/vegvisir.json
+
+# Hostname TLS probe works on networks that block direct-IP HTTPS.
+CONF_bark.identity.trace_urls=["https://cloudflare.com/cdn-cgi/trace","https://1.1.1.1/cdn-cgi/trace"]
+CONF_nomad.mimc_resource_enforcement=true
+# SLIRP/AVF guest addresses are not reachable LAN service endpoints.
+CONF_bark.network_paths.disable_non_loopback_lan=true
+
+# Mobile nodes explicitly leave on a normal shutdown.
+CONF_nomad.leave_on_terminate=true
+CONF_nomad.leave_on_interrupt=true
+
+# Membership allocations reach the authenticated QLite gateway over mim0.
+CONF_bark.qlite.listen=0.0.0.0:14227

@@ -35,8 +35,8 @@ Commands:
   kernel        Build custom kernel only (podroid_kernel.config + Linux source)
   initramfs     Build custom kernel + Alpine VM initramfs (vmlinuz + initrd)
   rootfs        Build Alpine rootfs squashfs (alpine-rootfs.squashfs)
-  ratatoskr-image
-                Build/export the embedded Ratatoskr debug Docker image asset
+  ratatoskr-native
+                Build the native arm64 Mimir runtime payload
   qemu          Build QEMU + podroid-bridge + podroid-launcher
   apk           Build the Android APK (also builds libtermux.so via Gradle NDK)
   deploy        Build APK, uninstall old version, and install to device
@@ -105,6 +105,17 @@ build_kernel() {
 }
 
 build_initramfs() {
+    if [ "$FAST" = true ]; then
+        local cached_kernel_ver
+        cached_kernel_ver=$(sed -n 's/^podroidKernelVersion=//p' "${SCRIPT_DIR}/gradle.properties")
+        docker build --build-arg "KERNEL_VERSION=$cached_kernel_ver" -t podroid-initramfs-update --target initramfs-update "$SCRIPT_DIR"
+        local extract_id
+        extract_id=$(docker create podroid-initramfs-update)
+        docker cp "$extract_id:/output/initrd.img" "$ASSETS/initrd.img"
+        docker rm "$extract_id" >/dev/null
+        return
+    fi
+
     local kernel_ver
     kernel_ver=$(grep -E '^podroidKernelVersion=' "${SCRIPT_DIR}/gradle.properties" | cut -d= -f2)
     log "Building custom kernel + Alpine Initramfs (Docker)..."
@@ -124,7 +135,8 @@ build_initramfs() {
 
 build_rootfs() {
     log "Building Alpine rootfs squashfs..."
-    sync_ratatoskr_image_for_rootfs
+    check_ratatoskr_native
+    "${SCRIPT_DIR}/tools/build-node-name.sh"
     local sysver
     sysver=$(grep -E '^[[:space:]]*versionCode[[:space:]]*=' "${SCRIPT_DIR}/app/build.gradle.kts" | grep -oE '[0-9]+' | head -1)
     docker build -f "${SCRIPT_DIR}/build-rootfs/Dockerfile.rootfs" \
@@ -135,42 +147,12 @@ build_rootfs() {
     success "Built ${ASSETS}/alpine-rootfs.squashfs ($(du -h "${ASSETS}/alpine-rootfs.squashfs" | cut -f1)), system-version ${sysver:-0}"
 }
 
-sync_ratatoskr_image_for_rootfs() {
-    local src="${SCRIPT_DIR}/build-rootfs/files/opt/podroid/assets/ratatoskr-debug-image.tar.zst"
-    local legacy="${ASSETS}/ratatoskr-debug-image.tar.zst"
-    local dest="${SCRIPT_DIR}/build-rootfs/files/opt/podroid/assets/ratatoskr-debug-image.tar.zst"
-    mkdir -p "$(dirname "$dest")"
-    [ -f "$src" ] || error "Missing required Ratatoskr debug image asset: ${src}. Run './build-all.sh ratatoskr-image' first."
-    [ "$src" = "$dest" ] || cp "$src" "$dest"
-    rm -f "$legacy"
-    log "Synced embedded Ratatoskr image into rootfs context ($(du -h "$dest" | cut -f1))."
+check_ratatoskr_native() {
+    [ -s "${SCRIPT_DIR}/build-rootfs/files/opt/podroid/assets/ratatoskr-native.tar.zst" ] || error "Run ./build-all.sh ratatoskr-native first"
 }
 
-build_ratatoskr_image() {
-    local mimir_dir="${MIMIR_DIR:-${SCRIPT_DIR}/../Mimir}"
-    local image_name="${RATATOSKR_IMAGE:-b8kings0ga/ratatoskr-debug:latest}"
-    local out="${SCRIPT_DIR}/build-rootfs/files/opt/podroid/assets/ratatoskr-debug-image.tar.zst"
-
-    [ -d "$mimir_dir" ] || error "Mimir repo not found at ${mimir_dir}. Set MIMIR_DIR=/path/to/Mimir."
-    command -v docker >/dev/null 2>&1 || error "docker is required to build the Ratatoskr image asset."
-    command -v zstd >/dev/null 2>&1 || error "zstd is required to compress the Ratatoskr image asset."
-
-    log "Building Ratatoskr debug image for linux/arm64 from ${mimir_dir}..."
-    if command -v task >/dev/null 2>&1 && [ -f "${mimir_dir}/Taskfile.yml" ]; then
-        (
-            cd "$mimir_dir"
-            TARGETARCH=arm64 IMAGE_NAME="$image_name" task docker:ratatoskr:debug:local
-        )
-    else
-        warn "task not found; falling back to docker build. This expects Mimir dist/bin/arm64 to already exist."
-        docker build --platform linux/arm64 --build-arg TARGETARCH=arm64 -t "$image_name" "$mimir_dir"
-    fi
-
-    mkdir -p "$(dirname "$out")"
-    log "Exporting ${image_name} to ${out}..."
-    docker save "$image_name" | zstd -T0 -19 -o "$out" -f
-    sync_ratatoskr_image_for_rootfs
-    success "Ratatoskr debug image asset ready: ${out} ($(du -h "$out" | cut -f1))"
+build_ratatoskr_native() {
+    "${SCRIPT_DIR}/tools/build-ratatoskr-native.sh"
 }
 
 build_qemu() {
@@ -201,10 +183,10 @@ build_qemu() {
 build_apk() {
     for asset in vmlinuz-virt initrd.img alpine-rootfs.squashfs; do
         [ -f "${ASSETS}/${asset}" ] || \
-            error "Missing required APK asset: ${ASSETS}/${asset}. Run './build-all.sh initramfs rootfs ratatoskr-image' first."
+            error "Missing required APK asset: ${ASSETS}/${asset}. Run './build-all.sh initramfs rootfs ratatoskr-native' first."
     done
-    [ -f "${SCRIPT_DIR}/build-rootfs/files/opt/podroid/assets/ratatoskr-debug-image.tar.zst" ] || \
-        error "Missing required Ratatoskr rootfs payload: ${SCRIPT_DIR}/build-rootfs/files/opt/podroid/assets/ratatoskr-debug-image.tar.zst. Run './build-all.sh ratatoskr-image' first."
+    [ -f "${SCRIPT_DIR}/build-rootfs/files/opt/podroid/assets/ratatoskr-native.tar.zst" ] || \
+        error "Missing required Ratatoskr rootfs payload: ${SCRIPT_DIR}/build-rootfs/files/opt/podroid/assets/ratatoskr-native.tar.zst. Run './build-all.sh ratatoskr-native' first."
     log "Building APK via Gradle..."
     ./gradlew assembleDebug
     success "APK built: app/build/outputs/apk/debug/app-debug.apk"
@@ -296,13 +278,13 @@ case "$1" in
     kernel)    build_kernel ;;
     initramfs) build_initramfs ;;
     rootfs)    build_rootfs ;;
-    ratatoskr-image) build_ratatoskr_image ;;
+    ratatoskr-native) build_ratatoskr_native ;;
     qemu)      build_qemu ;;
     apk)       build_apk ;;
     deploy)    build_apk && deploy_apk ;;
     test)      run_boot_test ;;
     all)
-        build_ratatoskr_image
+        build_ratatoskr_native
         build_initramfs
         build_rootfs
         build_qemu

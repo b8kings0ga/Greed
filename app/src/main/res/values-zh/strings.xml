@@ -237,4 +237,5 @@
     <string name="avf_action_use_one_core">使用 1 个核心</string>
     <string name="avf_action_switch_qemu">切换至 QEMU</string>
     <string name="avf_action_retry">重试</string>
+    <string name="vm_max_resources">使用最大资源（为 Android 保留必要内存）</string>
 </resources>

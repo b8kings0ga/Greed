@@ -13,12 +13,14 @@ start() {
     ip link set lo up 2>/dev/null
     NETIF=""
     for _i in $(seq 1 10); do
-        # Exclude virtual/bridge devices so the real virtio NIC is picked.
-        # The LXC bridge lxcbr0 (brought up by the dnsmasq.lxcbr0 service),
-        # podman/docker/cni bridges, and veth pairs would otherwise be
-        # candidates; the grep below filters them all out by name.
-        NETIF=$(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | \
-            grep -vE '^(lo|dummy[0-9]*|veth|podman|cni|docker|lxcbr|br-)' | head -1)
+        # QEMU and AVF expose a device-backed virtio Ethernet NIC. Software
+        # interfaces (including built-in IFB devices) must never get its IP.
+        for candidate in /sys/class/net/*; do
+            [ -e "$candidate/device" ] || continue
+            [ "$(cat "$candidate/type" 2>/dev/null)" = 1 ] || continue
+            NETIF=${candidate##*/}
+            break
+        done
         [ -n "$NETIF" ] && break
         sleep 0.05
     done
@@ -62,6 +64,7 @@ start() {
             return 1
         fi
     fi
+    cp /etc/resolv.conf /run/podroid-resolv.conf
     echo "Network found" > /dev/console
     eend 0
 }

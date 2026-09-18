@@ -1,0 +1,20 @@
+#!/sbin/openrc-run
+description="Mimir node maintenance worker"
+command="/usr/local/bin/mim-maintenance-worker"
+pidfile="/run/mim-maintenance.pid"
+supervisor="supervise-daemon"
+respawn_delay=5
+respawn_max=0
+respawn_period=120
+output_log="/var/log/mim-maintenance.log"
+error_log="/var/log/mim-maintenance.log"
+
+depend() {
+    need localmount
+    after podroid-migrate podroid-bootstrap podroid-ratatoskr
+    before podroid-ready
+}
+
+start_pre() {
+    test -x "$command" && mountpoint -q /var/lib/ratatoskr
+}

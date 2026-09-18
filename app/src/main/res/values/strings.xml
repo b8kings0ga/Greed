@@ -236,4 +236,5 @@
     <string name="avf_action_use_one_core">Use 1 core</string>
     <string name="avf_action_switch_qemu">Switch to QEMU</string>
     <string name="avf_action_retry">Retry</string>
+    <string name="vm_max_resources">Use maximum resources (reserve memory for Android)</string>
 </resources>

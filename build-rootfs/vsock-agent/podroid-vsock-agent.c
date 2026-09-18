@@ -637,6 +637,14 @@ static void ctl_loop(int fd) {
         } else if (strcmp(line, "PING") == 0) {
             fprintf(out, "PONG\n");
             fflush(out);
+        } else if (strcmp(line, "SHUTDOWN") == 0) {
+            fprintf(out, "SHUTTING_DOWN\n");
+            fflush(out);
+            pid_t child = fork();
+            if (child == 0) {
+                execl("/sbin/poweroff", "poweroff", (char *)NULL);
+                _exit(127);
+            }
         } else if (strcmp(line, "SYNC") == 0) {
             sync();              /* flush all guest filesystem buffers to virtio-blk */
             fprintf(out, "SYNCED\n");

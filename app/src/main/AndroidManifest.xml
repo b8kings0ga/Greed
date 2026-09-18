@@ -21,6 +21,9 @@
     <!-- Keep CPU awake while VM is running -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Read NFC tags and expose immutable events to guest gateway services. -->
+    <uses-permission android:name="android.permission.NFC" />
+
     <!-- Camera shim exposed to the guest through the host bridge. -->
     <uses-permission android:name="android.permission.CAMERA" />
 
@@ -54,6 +57,7 @@
     <uses-feature android:name="android.hardware.opengles.aep" android:required="false" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.nfc" android:required="false" />
 
     <!--
         USB host mode — needed to pass external USB devices into the VM. Per-device

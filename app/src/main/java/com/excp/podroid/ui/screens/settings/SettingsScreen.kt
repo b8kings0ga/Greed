@@ -225,15 +225,25 @@ fun SettingsScreen(
                         modifier = Modifier.padding(top = PodroidTokens.Spacing.SM),
                     )
                 }
+                PodroidListRow(
+                    label = stringResource(R.string.vm_max_resources),
+                    rightSlot = {
+                        PodroidSwitch(
+                            checked = ui.vmMaxResources,
+                            onCheckedChange = { if (vmNotRunning) viewModel.setVmMaxResources(it) },
+                            enabled = vmNotRunning,
+                        )
+                    },
+                )
                 RamSection(
                     currentMb = ui.vmRamMb,
                     onChange = viewModel::setVmRamMb,
-                    enabled = vmNotRunning,
+                    enabled = vmNotRunning && !ui.vmMaxResources,
                 )
                 CpusSection(
                     currentCpus = ui.vmCpus,
                     onChange = viewModel::setVmCpus,
-                    enabled = vmNotRunning,
+                    enabled = vmNotRunning && !ui.vmMaxResources,
                 )
                 PodroidListRow(
                     label = stringResource(R.string.storage),

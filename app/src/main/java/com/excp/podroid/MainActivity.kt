@@ -23,6 +23,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.excp.podroid.data.repository.LanguageManager
 import com.excp.podroid.engine.hostbridge.camera.CameraStreamManager
 import com.excp.podroid.engine.hostbridge.microphone.MicrophoneStreamManager
+import com.excp.podroid.engine.hostbridge.nfc.NfcReaderManager
 import com.excp.podroid.ui.navigation.NavGraphViewModel
 import com.excp.podroid.ui.navigation.PodroidNavGraph
 import com.excp.podroid.ui.theme.PodroidTheme
@@ -34,6 +35,7 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var cameraStreamManager: CameraStreamManager
     @Inject lateinit var microphoneStreamManager: MicrophoneStreamManager
+    @Inject lateinit var nfcReaderManager: NfcReaderManager
 
     override fun attachBaseContext(newBase: Context?) {
         val base = newBase ?: return super.attachBaseContext(null)
@@ -88,5 +90,22 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        if (isFinishing && !isChangingConfigurations) {
+            com.excp.podroid.service.PodroidService.stop(this)
+        }
+        super.onDestroy()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        nfcReaderManager.enableReaderMode(this)
+    }
+
+    override fun onPause() {
+        nfcReaderManager.disableReaderMode(this)
+        super.onPause()
     }
 }

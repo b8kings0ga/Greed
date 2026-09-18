@@ -68,12 +68,14 @@ class HomeViewModel @Inject constructor(
 
     /** Aggregated metadata for the Home data sections. */
     val meta: StateFlow<HomeMeta> = combine(
+        combine(settingsRepository.vmRamMb, settingsRepository.vmCpus, settingsRepository.vmMaxResources) { ram, cpus, maximum ->
+            detectAutoVmResources(ram, cpus, maximum)
+        },
         settingsRepository.storageSizeGb,
         settingsRepository.sshEnabled,
         portForwardRepository.rules.map { it.size }.distinctUntilChanged(),
         settingsRepository.lastBootDurationMs,
-    ) { storageGb, sshEnabled, portForwardCount, lastBootDurationMs ->
-        val auto = detectAutoVmResources()
+    ) { auto, storageGb, sshEnabled, portForwardCount, lastBootDurationMs ->
         HomeMeta(
             ramMb = auto.first,
             cpus = auto.second,
@@ -85,7 +87,7 @@ class HomeViewModel @Inject constructor(
     }.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5000),
-        HomeMeta(ramMb = 512, cpus = 2, storageGb = 8, sshEnabled = false, portForwardCount = 0, lastBootDurationMs = 0L),
+        HomeMeta(ramMb = 2048, cpus = 2, storageGb = 8, sshEnabled = false, portForwardCount = 0, lastBootDurationMs = 0L),
     )
 
     // Ticker — drives uptime display refresh every second, but only while the VM
@@ -107,14 +109,13 @@ class HomeViewModel @Inject constructor(
     /** Phone IPv4 — cheap, lazily recomputed when the screen reads it. */
     fun phoneIp(): String = NetworkUtils.localIpv4(context)
 
-    private fun detectAutoVmResources(): Pair<Int, Int> {
-        val cpus = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+    private fun detectAutoVmResources(requestedRamMb: Int, requestedCpus: Int, maximum: Boolean): Pair<Int, Int> {
         val am = context.getSystemService(ActivityManager::class.java)
         val mi = ActivityManager.MemoryInfo()
         am.getMemoryInfo(mi)
         val totalMb = (mi.totalMem / (1024L * 1024L)).toInt().coerceAtLeast(512)
-        val hostReserveMb = maxOf(1536, totalMb / 8)
-        return minOf(8192, totalMb - hostReserveMb).coerceAtLeast(512) to cpus
+        val result = com.excp.podroid.engine.VmResourcePolicy.resolve(totalMb, Runtime.getRuntime().availableProcessors(), maximum, requestedRamMb, requestedCpus)
+        return result.ramMb to result.cpus
     }
 
     private val _updateInfo = MutableStateFlow<UpdateInfo?>(null)

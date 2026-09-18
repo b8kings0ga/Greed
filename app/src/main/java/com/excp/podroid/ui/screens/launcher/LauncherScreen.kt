@@ -54,6 +54,7 @@ fun LauncherScreen(
     viewModel: LauncherViewModel = hiltViewModel(),
 ) {
     val vmState by viewModel.vmState.collectAsStateWithLifecycle()
+    val resourcesLabel by viewModel.resourcesLabel.collectAsStateWithLifecycle()
     val bootStage by viewModel.bootStage.collectAsStateWithLifecycle()
     val consoleText by viewModel.consoleText.collectAsStateWithLifecycle()
     val sshEnabled by viewModel.sshEnabled.collectAsStateWithLifecycle()
@@ -98,7 +99,7 @@ fun LauncherScreen(
                     bootDuration = viewModel.bootDurationLabel(),
                     uptimeLabel = uptimeLabel,
                     sshCommand = viewModel.sshCommand(),
-                    resourcesLabel = viewModel.autoResourcesLabel(),
+                    resourcesLabel = resourcesLabel,
                     sshEnabled = sshEnabled,
                 )
                 LauncherActions(

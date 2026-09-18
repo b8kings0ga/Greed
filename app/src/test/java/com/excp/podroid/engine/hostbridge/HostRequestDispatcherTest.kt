@@ -40,6 +40,7 @@ private fun dispatcher(
     location: suspend (String) -> String = { HostProtocol.ok() },
     microphone: suspend (String) -> String = { HostProtocol.ok() },
     addResult: AddRuleResult = AddRuleResult.ADDED,
+    nfc: suspend (String) -> String = { HostProtocol.ok() },
 ) = HostRequestDispatcher(
     notifications = poster,
     addForward = { r ->
@@ -57,6 +58,7 @@ private fun dispatcher(
     camera = camera,
     location = location,
     microphone = microphone,
+    nfc = nfc,
 )
 
 class HostRequestDispatcherTest {
@@ -227,5 +229,21 @@ class HostRequestDispatcherTest {
         assertTrue(d.handle("MICROPHONE sideways").startsWith("ERR "))
         assertTrue(d.handle("MICROPHONE lazy sideways").startsWith("ERR "))
         assertTrue(d.handle("MICROPHONE url extra").startsWith("ERR "))
+    }
+
+    @Test fun nfcValidatesActionAndDelegates() = runBlocking {
+        val seen = mutableListOf<String>()
+        val d = dispatcher(nfc = { seen += it; HostProtocol.ok(HostProtocol.enc("{}")) })
+
+        assertEquals("OK ${HostProtocol.enc("{}")}", d.handle("NFC status"))
+        assertEquals("OK ${HostProtocol.enc("{}")}", d.handle("NFC current"))
+        assertEquals("OK ${HostProtocol.enc("{}")}", d.handle("NFC next"))
+        assertEquals("OK ${HostProtocol.enc("{}")}", d.handle("NFC next session-id:42"))
+        assertEquals(listOf("status", "current", "next -", "next session-id:42"), seen)
+
+        assertTrue(d.handle("NFC watch").startsWith("ERR "))
+        assertTrue(d.handle("NFC status extra").startsWith("ERR "))
+        assertTrue(d.handle("NFC next bad/cursor").startsWith("ERR "))
+        assertTrue(d.handle("NFC next a b").startsWith("ERR "))
     }
 }

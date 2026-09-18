@@ -20,24 +20,15 @@ start() {
         done
     done
 
-    _ratatoskr_container=ratatoskr
-    if [ -r /etc/ratatoskr/env ]; then
-        _configured=$(sed -n 's/^RATATOSKR_CONTAINER=//p' /etc/ratatoskr/env 2>/dev/null | tail -1)
-        [ -n "$_configured" ] && _ratatoskr_container=$_configured
+    if ! rc-service podroid-ratatoskr status >/dev/null 2>&1; then
+        echo "Ratatoskr unavailable; continuing VM boot for diagnostics" > /dev/console
     fi
-    if command -v docker >/dev/null 2>&1; then
-        _i=0
-        while [ "$_i" -lt 15 ]; do
-            _running=$(docker inspect -f '{{.State.Running}}' "$_ratatoskr_container" 2>/dev/null || true)
-            [ "$_running" = "true" ] && break
-            _i=$((_i + 1))
-            sleep 1
-        done
-        _running=$(docker inspect -f '{{.State.Running}}' "$_ratatoskr_container" 2>/dev/null || true)
-        if [ "$_running" != "true" ]; then
-            echo "Ratatoskr not running; continuing VM boot for diagnostics" > /dev/console
-            docker logs --tail 120 "$_ratatoskr_container" > /dev/console 2>&1 || true
-        fi
+    # A migration may add the maintenance service to the runlevel after
+    # OpenRC enumerated this boot's services. Start it now as well, so an
+    # upgraded overlay is ready for source-based rollouts without a reboot.
+    if [ -x /etc/init.d/mim-maintenance ]; then
+        rc-service mim-maintenance start >/dev/null 2>&1 || \
+            echo "Mimir maintenance worker unavailable" > /dev/console
     fi
 
     # Emit the boot stages PodroidQemu.detectBootStage() expects.

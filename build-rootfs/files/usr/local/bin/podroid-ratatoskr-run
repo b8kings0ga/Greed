@@ -1,0 +1,39 @@
+#!/bin/sh
+set -eu
+# Ratatoskr takes over DNS after startup. Restore the network resolver before
+# every respawn, otherwise its own HTTPS bootstrap depends on a stopped daemon.
+if [ -s /run/podroid-resolv.conf ] && grep -q '^nameserver ::1$' /etc/resolv.conf; then
+    cp /run/podroid-resolv.conf /etc/resolv.conf
+fi
+# CONF keys contain dots: pass literal arguments to env, never source/eval.
+set --
+for file in /etc/ratatoskr/env /run/ratatoskr-resources.env; do
+    [ -r "$file" ] || continue
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in CONF_*=*|GOMEMLIMIT=*|GOMAXPROCS=*) set -- "$@" "$line" ;; esac
+    done < "$file"
+done
+# QEMU's eth0 is private SLIRP, not a public server interface. Android's
+# explicit port forwards own ingress; a second public-interface filter breaks
+# VNC/audio and user forwards. Allocation/CNI isolation remains enabled.
+# AVF retains Mimir's firewall default. Respect an explicit operator override.
+if ! grep -qw 'podroid\.backend=avf' /proc/cmdline && \
+   ! grep -q '^CONF_bark.control_plane_firewall.enabled=' /etc/ratatoskr/env; then
+    set -- "$@" "CONF_bark.control_plane_firewall.enabled=false"
+fi
+# Use the shared Mimir region/alias algorithm, cached for stable mobile identity.
+if ! grep -q '^CONF_bark.node_name=.' /etc/ratatoskr/env; then
+    name_file=/var/lib/ratatoskr/node-name
+    if [ ! -s "$name_file" ]; then
+        id=$(cat /var/lib/ratatoskr/nomad/client/client-id 2>/dev/null || cat /proc/sys/kernel/random/uuid)
+        /usr/local/bin/podroid-node-name --key "$id" > "$name_file.tmp"
+        mv "$name_file.tmp" "$name_file"
+    fi
+    set -- "$@" "CONF_bark.node_name=$(cat "$name_file")"
+fi
+# Provision client credentials separately; never package authority secrets in APKs.
+credentials=/var/lib/ratatoskr/nats-client/internal.creds
+if [ -s "$credentials" ] && ! grep -q '^CONF_bark.nats.operator.internal_credentials_file=' /etc/ratatoskr/env; then
+    set -- "$@" "CONF_bark.nats.operator.internal_credentials_file=$credentials"
+fi
+exec env "$@" /usr/local/bin/ratatoskr

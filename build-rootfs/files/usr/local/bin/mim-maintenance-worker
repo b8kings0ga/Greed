@@ -1,0 +1,54 @@
+#!/bin/sh
+set -eu
+root=/var/lib/ratatoskr/scheduler-agent/worker
+mkdir -p "$root/pending" "$root/processing" "$root/failed"
+chmod 0700 "$root" "$root/pending" "$root/processing" "$root/failed"
+runtime=/var/lib/ratatoskr/runtime-rollout/worker
+mkdir -p "$runtime/pending" "$runtime/processing" "$runtime/done" "$runtime/failed"
+chmod 0700 "$runtime" "$runtime/pending" "$runtime/processing" "$runtime/done" "$runtime/failed"
+
+while :; do
+    for request in "$root"/processing/*.json "$root"/pending/*.json; do
+        [ -s "$request" ] || continue
+        name=${request##*/}
+        case "$name" in *.json) ;; *) continue ;; esac
+        generation=${name%.json}
+        case "$generation" in ''|*[!0-9]*) continue ;; esac
+        active="$root/processing/$name"
+        if [ "$request" != "$active" ]; then
+            mv "$request" "$active" || continue
+        fi
+        log="$root/$generation.log"
+        if /usr/local/bin/ratatoskr scheduler-agent apply --stdin < "$active" >> "$log" 2>&1; then
+            rm "$active"
+            rm -f "$root/failed/$generation"
+        else
+            printf '%s\n' "scheduler upgrade generation $generation failed; see $log" > "$root/failed/$generation.tmp"
+            mv "$root/failed/$generation.tmp" "$root/failed/$generation"
+            rm "$active"
+        fi
+    done
+    for request in "$runtime"/processing/*.sh "$runtime"/pending/*.sh; do
+        [ -s "$request" ] || continue
+        name=${request##*/}
+        case "$name" in *.sh) ;; *) continue ;; esac
+        generation=${name%.sh}
+        case "$generation" in ''|*[!0-9]*) continue ;; esac
+        active="$runtime/processing/$name"
+        if [ "$request" != "$active" ]; then
+            mv "$request" "$active" || continue
+        fi
+        log="$runtime/$generation.log"
+        if /bin/sh "$active" >> "$log" 2>&1; then
+            printf '%s\n' complete > "$runtime/done/$generation.tmp"
+            mv "$runtime/done/$generation.tmp" "$runtime/done/$generation"
+            rm "$active"
+            rm -f "$runtime/failed/$generation"
+        else
+            printf '%s\n' "runtime rollout generation $generation failed; see $log" > "$runtime/failed/$generation.tmp"
+            mv "$runtime/failed/$generation.tmp" "$runtime/failed/$generation"
+            rm "$active"
+        fi
+    done
+    sleep 1
+done

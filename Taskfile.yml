@@ -7,7 +7,7 @@ vars:
   ADB: '{{default "adb" .ADB}}'
   MIMIR_DIR: '{{default "../Mimir" .MIMIR_DIR}}'
   DIST_APK: '{{default "dist/podroid-debug.apk" .DIST_APK}}'
-  RATATOSKR_STAMP: '{{default ".ratatoskr-image-source.sha" .RATATOSKR_STAMP}}'
+  RATATOSKR_STAMP: '{{default ".ratatoskr-native-source.sha" .RATATOSKR_STAMP}}'
   YOLO_VENV: '{{default ".venv-yolo" .YOLO_VENV}}'
   YOLO_SOURCE: '{{default "http://192.168.1.33:18080/stream.mjpg" .YOLO_SOURCE}}'
   YOLO_PORT: '{{default "18888" .YOLO_PORT}}'
@@ -21,15 +21,19 @@ vars:
   STT_MIN_RMS: '{{default "0.025" .STT_MIN_RMS}}'
   STT_CHUNK_SECONDS: '{{default "2.5" .STT_CHUNK_SECONDS}}'
   STT_TRANSLATE: '{{default "true" .STT_TRANSLATE}}'
-  VEGVISIR_REGION: '{{default "brgru" .VEGVISIR_REGION}}'
-  VEGVISIR_NOMAD_RPC: >-
-    [200:fd04:ce3c:3f3f:644:e82d:67a0:68a0]:14647
-    [200:35ef:7ec1:4ebb:2ce1:1fb6:28b6:dcda]:14647
-    [200:5ffd:d183:f650:9155:7ad5:3003:5ecf]:14647
-  VEGVISIR_NATS: >-
-    nats://[200:fd04:ce3c:3f3f:644:e82d:67a0:68a0]:14222
-    nats://[200:35ef:7ec1:4ebb:2ce1:1fb6:28b6:dcda]:14222
-    nats://[200:5ffd:d183:f650:9155:7ad5:3003:5ecf]:14222
+  FLOW_PORT: '{{default "18889" .FLOW_PORT}}'
+  FLOW_STT_BACKEND: '{{default "faster-whisper" .FLOW_STT_BACKEND}}'
+  FLOW_CHUNK_SECONDS: '{{default "1.0" .FLOW_CHUNK_SECONDS}}'
+  FLOW_MIN_RMS: '{{default "0.005" .FLOW_MIN_RMS}}'
+  FLOW_LLM_URL: '{{default "https://gjallarhorn.gjallarhorngit.orb.local/v1/chat/completions" .FLOW_LLM_URL}}'
+  FLOW_LLM_BACKEND: '{{default "openai" .FLOW_LLM_BACKEND}}'
+  FLOW_LLM_MODEL: '{{default "data" .FLOW_LLM_MODEL}}'
+  FLOW_LLM_KEY: '{{default "fake-key" .FLOW_LLM_KEY}}'
+  FLOW_LLM_INSECURE: '{{default "true" .FLOW_LLM_INSECURE}}'
+  CF_ACCOUNT_ID: '{{default "493511f38053d97a5c71d021374bb67a" .CF_ACCOUNT_ID}}'
+  CF_AUTH_EMAIL: '{{default "Tiancailishen111@gmail.com" .CF_AUTH_EMAIL}}'
+  CF_WHISPER_MODEL: '{{default "@cf/openai/whisper" .CF_WHISPER_MODEL}}'
+  CF_GLM_MODEL: '{{default "@cf/zai-org/glm-4.7-flash" .CF_GLM_MODEL}}'
 
 tasks:
   default:
@@ -51,7 +55,7 @@ tasks:
         set -eu
         python3 -m venv "{{.YOLO_VENV}}"
         "{{.YOLO_VENV}}/bin/python" -m pip install --upgrade pip
-        "{{.YOLO_VENV}}/bin/python" -m pip install ultralytics opencv-python flask pillow faster-whisper numpy \
+        "{{.YOLO_VENV}}/bin/python" -m pip install ultralytics opencv-python flask pillow faster-whisper mlx-whisper numpy \
           "git+https://github.com/ultralytics/CLIP.git"
 
   yolo:stream:
@@ -100,90 +104,51 @@ tasks:
           --stt-min-rms "{{.STT_MIN_RMS}}" \
           {{if eq .STT_TRANSLATE "false"}}--no-stt-translate{{else}}--stt-translate{{end}}
 
-  vegvisir:update:
-    desc: Update Podroid Ratatoskr join targets from the local mim tree.
+  sense:flow:
+    desc: Run a local Wispr Flow style dictation cleanup page.
     cmds:
       - |
         set -eu
-        mimir="{{.MIMIR_DIR}}"
-        region="{{.VEGVISIR_REGION}}"
-        test -d "$mimir/.git" || {
-          echo "Mimir repo not found: $mimir" >&2
+        test -x "{{.YOLO_VENV}}/bin/python" || task yolo:install
+        "{{.YOLO_VENV}}/bin/python" tools/flow.py \
+          --audio-source "{{.STT_SOURCE}}" \
+          --port "{{.FLOW_PORT}}" \
+          --stt-backend "{{.FLOW_STT_BACKEND}}" \
+          --stt-model "{{.STT_MODEL}}" \
+          --language "{{.STT_LANGUAGE}}" \
+          --chunk-seconds "{{.FLOW_CHUNK_SECONDS}}" \
+          --min-rms "{{.FLOW_MIN_RMS}}" \
+          --llm-url "{{.FLOW_LLM_URL}}" \
+          --llm-backend "{{.FLOW_LLM_BACKEND}}" \
+          --llm-model "{{.FLOW_LLM_MODEL}}" \
+          --llm-key "{{.FLOW_LLM_KEY}}" \
+          --cf-account-id "{{.CF_ACCOUNT_ID}}" \
+          --cf-auth-email "{{.CF_AUTH_EMAIL}}" \
+          --cf-whisper-model "{{.CF_WHISPER_MODEL}}" \
+          --cf-glm-model "{{.CF_GLM_MODEL}}" \
+          {{if eq .FLOW_LLM_INSECURE "true"}}--llm-insecure{{else}}--no-llm-insecure{{end}}
+
+  sense:flow:cloudflare:
+    desc: Run Sense Flow with Cloudflare Whisper and GLM 4.7 Flash.
+    cmds:
+      - |
+        set -eu
+        test -n "${CF_GLOBAL_KEY:-}" || {
+          echo "CF_GLOBAL_KEY is required" >&2
           exit 1
         }
-        command -v mim >/dev/null 2>&1 || {
-          echo "mim command not found" >&2
-          exit 1
-        }
-        command -v jq >/dev/null 2>&1 || {
-          echo "jq is required to update vegvisir config" >&2
-          exit 1
-        }
-        tmp="$(mktemp)"
-        trap 'rm -f "$tmp"' EXIT
-        (
-          cd "$mimir"
-          mim tree
-        ) | tee "$tmp"
+        FLOW_STT_BACKEND=cloudflare-whisper \
+        FLOW_LLM_BACKEND=cloudflare-glm \
+        FLOW_LLM_INSECURE=false \
+        task sense:flow
 
-        count="$(awk -v region="$region" '
-          $0 == "+- " region {in_region=1; next}
-          in_region && /^+- / {in_region=0}
-          in_region && /^      nomad / {count++}
-          END {print count + 0}
-        ' "$tmp")"
-        if [ "$count" -eq 0 ]; then
-          echo "No vegvisir servers found for region $region in mim tree output" >&2
-          exit 1
-        fi
-
-        retry_json="$(awk -v region="$region" '
-          $0 == "+- " region {in_region=1; next}
-          in_region && /^+- / {in_region=0}
-          in_region && /^      nomad / {sub(/^      nomad /, ""); print}
-        ' "$tmp" | jq -R -s -c 'split("\n")[:-1]')"
-        nats_json="$(awk -v region="$region" '
-          $0 == "+- " region {in_region=1; next}
-          in_region && /^+- / {in_region=0}
-          in_region && /^      nats / {sub(/^      nats /, ""); print}
-        ' "$tmp" | jq -R -s -c 'split("\n")[:-1]')"
-        rpc_block="$(awk -v region="$region" '
-          $0 == "+- " region {in_region=1; next}
-          in_region && /^+- / {in_region=0}
-          in_region && /^      nomad / {sub(/^      nomad /, ""); print "    " $0}
-        ' "$tmp")"
-        nats_block="$(awk -v region="$region" '
-          $0 == "+- " region {in_region=1; next}
-          in_region && /^+- / {in_region=0}
-          in_region && /^      nats / {sub(/^      nats /, ""); print "    " $0}
-        ' "$tmp")"
-
-        perl -0pi -e 's#CONF_nomad\.client\.server_join\.retry_join=\[[^\n]*\]#CONF_nomad.client.server_join.retry_join='"$retry_json"'#' build-rootfs/files/etc/ratatoskr/env
-        perl -0pi -e 's#CONF_bark\.identity\.nats_urls=\[[^\n]*\]#CONF_bark.identity.nats_urls='"$nats_json"'#' build-rootfs/files/etc/ratatoskr/env
-        perl -0pi -e 's#CONF_bark\.dns\.nats_urls=\[[^\n]*\]#CONF_bark.dns.nats_urls='"$nats_json"'#' build-rootfs/files/etc/ratatoskr/env
-
-        python3 - "$rpc_block" "$nats_block" <<'PY'
-        import pathlib
-        import re
-        import sys
-
-        path = pathlib.Path("Taskfile.yml")
-        text = path.read_text()
-        rpc = sys.argv[1].rstrip()
-        nats = sys.argv[2].rstrip()
-        text = re.sub(r"(  VEGVISIR_NOMAD_RPC: >-\n)(?:    .+\n)+(?=  VEGVISIR_NATS: >-)", r"\1" + rpc + "\n", text)
-        text = re.sub(r"(  VEGVISIR_NATS: >-\n)(?:    .+\n)+(?=\ntasks:)", r"\1" + nats + "\n", text)
-        if "tasks:" not in text:
-            raise SystemExit("Taskfile.yml rewrite failed")
-        path.write_text(text)
-        PY
-
-        echo "Updated Podroid vegvisir config for $region:"
-        printf '%s\n' "$rpc_block"
-        printf '%s\n' "$nats_block"
+  vegvisir:update:
+    desc: Refresh join targets from the current Mimir vegvisir document.
+    cmds:
+      - python3 tools/sync-vegvisir.py
 
   ratatoskr:status:
-    desc: Show whether the embedded Ratatoskr image is current with the local Mimir checkout.
+    desc: Show whether the embedded Ratatoskr native payload is current with the local Mimir checkout.
     cmds:
       - |
         set -eu
@@ -194,18 +159,18 @@ tasks:
         }
         current="$(task _ratatoskr:fingerprint)"
         previous="$(cat "{{.RATATOSKR_STAMP}}" 2>/dev/null || true)"
-        image_asset="build-rootfs/files/opt/podroid/assets/ratatoskr-debug-image.tar.zst"
+        image_asset="build-rootfs/files/opt/podroid/assets/ratatoskr-native.tar.zst"
         echo "Mimir:     $mimir"
         echo "Current:   $current"
         echo "Previous:  ${previous:-<none>}"
         if [ "$current" = "$previous" ] && [ -f "$image_asset" ]; then
-          echo "Ratatoskr image asset is current."
+          echo "Ratatoskr native payload asset is current."
         else
-          echo "Ratatoskr image asset needs update."
+          echo "Ratatoskr native payload asset needs update."
         fi
 
   ratatoskr:update-apk:
-    desc: Rebuild Ratatoskr image only when Mimir changed, then rebuild rootfs and APK into dist/.
+    desc: Rebuild Ratatoskr native payload only when Mimir changed, then rebuild rootfs and APK into dist/.
     cmds:
       - |
         set -eu
@@ -216,17 +181,17 @@ tasks:
         }
         current="$(task _ratatoskr:fingerprint)"
         previous="$(cat "{{.RATATOSKR_STAMP}}" 2>/dev/null || true)"
-        image_asset="build-rootfs/files/opt/podroid/assets/ratatoskr-debug-image.tar.zst"
+        image_asset="build-rootfs/files/opt/podroid/assets/ratatoskr-native.tar.zst"
 
         if [ "$current" != "$previous" ] || [ ! -f "$image_asset" ]; then
-          echo "Ratatoskr image source changed; rebuilding embedded image."
-          MIMIR_DIR="$mimir" ./build-all.sh ratatoskr-image
+          echo "Ratatoskr native payload source changed; rebuilding embedded native payload."
+          MIMIR_DIR="$mimir" ./build-all.sh ratatoskr-native
           printf '%s\n' "$current" > "{{.RATATOSKR_STAMP}}"
         else
-          echo "Ratatoskr image source unchanged; keeping existing embedded image."
+          echo "Ratatoskr native payload source unchanged; keeping existing embedded native payload."
         fi
 
-        echo "Rebuilding rootfs so embedded image/config/service changes are packaged."
+        echo "Rebuilding rootfs so embedded native payload/config/service changes are packaged."
         ./build-all.sh rootfs
 
         if [ -d /opt/homebrew/opt/openjdk ]; then
@@ -244,7 +209,7 @@ tasks:
       - task ratatoskr:update-apk
 
   ratatoskr:force-update-apk:
-    desc: Force rebuild Ratatoskr image, rootfs, and APK into dist/.
+    desc: Force rebuild Ratatoskr native payload, rootfs, and APK into dist/.
     cmds:
       - |
         set -eu
@@ -284,7 +249,7 @@ tasks:
         {{.ADB}} -s "$serial" shell am force-stop "{{.PACKAGE}}" >/dev/null 2>&1 || true
         {{.ADB}} -s "$serial" shell monkey -p "{{.PACKAGE}}" -c android.intent.category.LAUNCHER 1 >/dev/null
         echo "Done. Fixed vegvisir Nomad RPC targets:"
-        printf '  %s\n' {{.VEGVISIR_NOMAD_RPC}}
+        python3 -c 'import json; d=json.load(open("build-rootfs/files/etc/ratatoskr/vegvisir.json")); print(json.dumps(d["regions"], indent=2))'
 
   sideload:no-launch:
     desc: Install the already-built Podroid APK onto one adb device without launching it.
@@ -335,24 +300,11 @@ tasks:
         {{.ADB}} -s "$serial" shell run-as "{{.PACKAGE}}" tail -80 files/console.log || true
         echo
         echo "Expected fixed Nomad RPC targets:"
-        printf '  %s\n' {{.VEGVISIR_NOMAD_RPC}}
+        python3 -c 'import json; d=json.load(open("build-rootfs/files/etc/ratatoskr/vegvisir.json")); print(json.dumps(d["regions"], indent=2))'
         echo
         echo "Expected fixed NATS targets:"
-        printf '  %s\n' {{.VEGVISIR_NATS}}
+        sed -n '/^CONF_bark.identity.nats_urls=/p' build-rootfs/files/etc/ratatoskr/env
 
   _ratatoskr:fingerprint:
     cmds:
-      - |
-        set -eu
-        mimir="{{.MIMIR_DIR}}"
-        (
-          cd "$mimir"
-          git rev-parse HEAD
-          git status --porcelain=v1
-          git diff --binary
-          git ls-files --others --exclude-standard | while IFS= read -r file; do
-            [ -f "$file" ] || continue
-            printf 'UNTRACKED %s\n' "$file"
-            shasum -a 256 "$file"
-          done
-        ) | shasum -a 256 | awk '{print $1}'
+      - MIMIR_DIR="{{.MIMIR_DIR}}" python3 tools/runtime-fingerprint.py

@@ -69,6 +69,7 @@ RUN printf '%s\n' \
     'CONFIG_NETFILTER_XT_TARGET_MASQUERADE=y' \
     'CONFIG_NETFILTER_XT_TARGET_REDIRECT=y' \
     'CONFIG_NETFILTER_XT_TARGET_MARK=y' \
+    'CONFIG_NETFILTER_XT_TARGET_CHECKSUM=y' \
     'CONFIG_OVERLAY_FS=y' \
     'CONFIG_FUSE_FS=y' \
     'CONFIG_EXT4_FS_SECURITY=y' \
@@ -112,6 +113,17 @@ RUN printf '%s\n' \
     'CONFIG_BTRFS_FS=y' \
     'CONFIG_BTRFS_FS_POSIX_ACL=y' \
     'CONFIG_SECURITY_APPARMOR=y' \
+    'CONFIG_SECURITY_LANDLOCK=y' \
+    'CONFIG_NET_SCH_INGRESS=y' \
+    'CONFIG_NET_SCH_HTB=y' \
+    'CONFIG_NET_CLS_BPF=y' \
+    'CONFIG_NET_CLS_FW=y' \
+    'CONFIG_NET_CLS_U32=y' \
+    'CONFIG_NET_CLS_MATCHALL=y' \
+    'CONFIG_NET_ACT_MIRRED=y' \
+    'CONFIG_NET_ACT_BPF=y' \
+    'CONFIG_IFB=y' \
+    'CONFIG_LSM="landlock,lockdown,yama,integrity,apparmor"' \
     'CONFIG_IP6_NF_MANGLE=y' \
     'CONFIG_BINFMT_MISC=y' \
     'CONFIG_VSOCKETS=y' \
@@ -130,7 +142,7 @@ RUN cd linux-${KERNEL_VERSION} \
                   IP6_NF_IPTABLES IP6_NF_FILTER IP6_NF_NAT \
                   IP_NF_TARGET_MASQUERADE IP6_NF_TARGET_MASQUERADE \
                   NETFILTER_XT_TARGET_MASQUERADE NF_NAT_MASQUERADE \
-                  NFT_COMPAT NFT_MASQ NFT_NAT \
+                  SECURITY_LANDLOCK NET_SCH_INGRESS NET_SCH_HTB NET_CLS_BPF NET_CLS_FW NET_CLS_U32 NET_CLS_MATCHALL NET_ACT_MIRRED NET_ACT_BPF IFB NFT_COMPAT NFT_MASQ NFT_NAT NETFILTER_XT_TARGET_CHECKSUM \
                   VETH TUN NF_TABLES NF_NAT NETFILTER OVERLAY_FS FUSE_FS \
                   EXT4_FS_SECURITY SQUASHFS_XATTR SQUASHFS_ZSTD \
                   DECOMPRESS_ZSTD ZSTD_DECOMPRESS \
@@ -199,6 +211,19 @@ COPY --from=kernel-builder /modules/lib/modules /rootfs/lib/modules
 RUN rm -rf /rootfs/proc/* /rootfs/sys/* /rootfs/dev/* /rootfs/run/* \
            /rootfs/tmp/* /rootfs/boot
 RUN cd /rootfs && find . | cpio -o -H newc 2>/dev/null | gzip -9 > /output/initrd.img
+
+# Repack an initramfs-only update against the unchanged, already-built kernel.
+FROM alpine:3.23 AS initramfs-update
+ARG KERNEL_VERSION=7.0.10
+RUN apk add --no-cache cpio gzip findutils
+COPY app/src/main/assets/initrd.img /previous.img
+COPY --from=rootfs-builder / /rootfs/
+RUN cd /rootfs && gzip -dc /previous.img | cpio -id 'lib/modules/*' './lib/modules/*' \
+    && test -d "/rootfs/lib/modules/${KERNEL_VERSION}" \
+    && rm -f /previous.img \
+    && rm -rf proc/* sys/* dev/* run/* tmp/* boot \
+    && mkdir -p /output \
+    && find . | cpio -o -H newc 2>/dev/null | gzip -9 > /output/initrd.img
 
 # ==============================================================================
 # SECTION 2: QEMU & Bridge (Android ARM64) Build

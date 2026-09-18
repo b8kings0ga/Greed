@@ -47,6 +47,7 @@ import javax.inject.Inject
  * terminal-only theme/font/size) — those stay separate.
  */
 data class SettingsUiState(
+    val vmMaxResources: Boolean = true,
     val vmRamMb: Int = 512,
     val vmCpus: Int = 1,
     val storageSizeGb: Int = 2,
@@ -95,8 +96,9 @@ class SettingsViewModel @Inject constructor(
             settingsRepository.vmCpus,
             settingsRepository.storageSizeGb,
             settingsRepository.sshEnabled,
-        ) { ram, cpus, storage, ssh ->
-            arrayOf(ram, cpus, storage, ssh)
+            settingsRepository.vmMaxResources,
+        ) { ram, cpus, storage, ssh, maximum ->
+            arrayOf(ram, cpus, storage, ssh, maximum)
         },
         combine(
             settingsRepository.storageAccessEnabled,
@@ -112,6 +114,7 @@ class SettingsViewModel @Inject constructor(
         languageManager.language,
     ) { a, b, engineSel, lang, sysLang ->
         SettingsUiState(
+            vmMaxResources = a[4] as Boolean,
             vmRamMb = a[0] as Int,
             vmCpus = a[1] as Int,
             storageSizeGb = a[2] as Int,
@@ -190,6 +193,10 @@ class SettingsViewModel @Inject constructor(
         Log.d(TAG, "setLanguage: $value")
         languageManager.setLanguage(value)
         Log.d(TAG, "setLanguage done")
+    }
+
+    fun setVmMaxResources(value: Boolean) {
+        viewModelScope.launch { settingsRepository.setVmMaxResources(value) }
     }
 
     fun setVmRamMb(value: Int) {

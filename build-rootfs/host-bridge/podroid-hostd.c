@@ -11,7 +11,7 @@
  *   podroid-open      CLI: open a URL on Android (ACTION_VIEW).
  *   podroid-power     CLI: stop/restart the VM, or query status.
  *   podroid-headless  CLI (alias podroid-server): toggle server mode.
- *   sense            CLI: Android capability shim (`sense cam ...`, `sense loc ...`, `sense mic ...`).
+ *   sense            CLI: Android capability shim (`sense cam|loc|mic|nfc ...`).
  *   podroid-camera   CLI: legacy camera alias.
  *
  * Daemon transport (one request line -> one response line, serialized):
@@ -113,15 +113,16 @@ static int write_line(int fd, const char *s) {
 }
 
 /* Reads one LF-terminated line into buf (NUL-terminated, LF stripped).
- * Returns line length, 0 on EOF, -1 on error/timeout. */
+ * Returns line length, 0 on EOF, -1 on error, -2 when the line is too long. */
 static int read_line(int fd, char *buf, size_t cap) {
     size_t n = 0;
-    while (n < cap - 1) {
+    for (;;) {
         char c;
         ssize_t r = read(fd, &c, 1);
         if (r < 0) { if (errno == EINTR) continue; return -1; }
         if (r == 0) return n == 0 ? 0 : (int)n;
         if (c == '\n') break;
+        if (n >= cap - 1) { buf[cap - 1] = '\0'; errno = EMSGSIZE; return -2; }
         buf[n++] = c;
     }
     buf[n] = '\0';
@@ -129,11 +130,11 @@ static int read_line(int fd, char *buf, size_t cap) {
 }
 
 /* Like read_line but waits at most timeout_s for activity before each byte;
- * returns line length, 0 on EOF, -1 on error/timeout. poll() works on both
+ * returns line length, 0 on EOF, -1 on error/timeout, -2 when too long. poll() works on both
  * char devices (/dev/hvc2) and sockets, unlike SO_RCVTIMEO. */
 static int read_line_timeout(int fd, char *buf, size_t cap, int timeout_s) {
     size_t n = 0;
-    while (n < cap - 1) {
+    for (;;) {
         struct pollfd pfd = { .fd = fd, .events = POLLIN };
         int pr = poll(&pfd, 1, timeout_s * 1000);
         if (pr < 0) { if (errno == EINTR) continue; return -1; }
@@ -143,6 +144,7 @@ static int read_line_timeout(int fd, char *buf, size_t cap, int timeout_s) {
         if (r < 0) { if (errno == EINTR) continue; return -1; }
         if (r == 0) return n == 0 ? 0 : (int)n;
         if (c == '\n') break;
+        if (n >= cap - 1) { buf[cap - 1] = '\0'; errno = EMSGSIZE; return -2; }
         buf[n++] = c;
     }
     buf[n] = '\0';
@@ -338,8 +340,33 @@ static int cli_microphone(int argc, char **argv) {
         strcmp(argv[1], "lazy") == 0);
 }
 
+static int cli_nfc(int argc, char **argv) {
+    if (argc < 2) {
+        fprintf(stderr, "usage: sense nfc <status|current|next [cursor]>\n");
+        return 2;
+    }
+
+    char req[256];
+    if ((strcmp(argv[1], "status") == 0 || strcmp(argv[1], "current") == 0) && argc == 2) {
+        snprintf(req, sizeof(req), "NFC %s", argv[1]);
+    } else if (strcmp(argv[1], "next") == 0 && (argc == 2 || argc == 3)) {
+        snprintf(req, sizeof(req), "NFC next %s", argc == 3 ? argv[2] : "-");
+    } else {
+        fprintf(stderr, "usage: sense nfc <status|current|next [cursor]>\n");
+        return 2;
+    }
+
+    char resp[8192];
+    if (cli_roundtrip(req, resp, sizeof(resp)) < 0) {
+        fprintf(stderr, "podroid: host bridge not available\n");
+        return 1;
+    }
+    /* NFC payloads are compact JSON wrapped in HostProtocol base64. */
+    return cli_report(resp, 1);
+}
+
 static int cli_sense(int argc, char **argv) {
-    if (argc < 2) { fprintf(stderr, "usage: sense <cam|loc|mic> <command>\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: sense <cam|loc|mic|nfc> <command>\n"); return 2; }
     if (strcmp(argv[1], "cam") == 0) return cli_camera(argc - 1, argv + 1);
     if (strcmp(argv[1], "loc") == 0) {
         if (argc != 3) { fprintf(stderr, "usage: sense loc <current|status|address>\n"); return 2; }
@@ -356,7 +383,8 @@ static int cli_sense(int argc, char **argv) {
         return cli_report(resp, 1);
     }
     if (strcmp(argv[1], "mic") == 0) return cli_microphone(argc - 1, argv + 1);
-    fprintf(stderr, "usage: sense <cam|loc|mic> <command>\n");
+    if (strcmp(argv[1], "nfc") == 0) return cli_nfc(argc - 1, argv + 1);
+    fprintf(stderr, "usage: sense <cam|loc|mic|nfc> <command>\n");
     return 2;
 }
 
