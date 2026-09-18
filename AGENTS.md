@@ -308,7 +308,7 @@ QEMU ingress is owned by Android/SLIRP explicit forwards. The native runner defa
 
 ### Mobile identity, resources and exit (version 39)
 
-Default naming invokes `podroid-node-name`, built against Mimir's actual `pkg/nodename`, using verified trace loc+colo and persistent Nomad client ID. The generated region/alias is cached, explicit names are respected, and migration 38 backs up the legacy greed-ID name. `tools/build-node-name.sh` runs during rootfs builds.
+Default naming invokes `podroid-node-name`, built against Mimir's actual `pkg/nodelocation` and `pkg/nodename`, using a same-country POP or landmark and the persistent Nomad client ID. A cross-country POP yields no inferred region when no same-country landmark responds; the stable alias is used alone. The generated name is cached, explicit names are respected, and migration 38 backs up the legacy greed-ID name. `tools/build-node-name.sh` runs during rootfs builds.
 
 Maximum-resource mode defaults on: all Android-reported processors and physical memory minus max(1536 MiB, one eighth) reserved for Android. `VmResourcePolicy` is shared by launch and labels; Settings can select manual limits. Disk sizing remains independent.
 

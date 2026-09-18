@@ -158,7 +158,10 @@ slow boots remain visibly in the starting state.
 Native QEMU networking keeps Android/SLIRP port forwards as the ingress authority; it does not apply the server public-interface firewall to the private guest NIC. Mimir allocation isolation remains enabled, AVF keeps its normal firewall default, and explicit operator overrides are respected.
 
 Mobile lifecycle defaults (version 39): names use Mimir's shared region/alias
-algorithm; maximum resources use all host processors and RAM after the Android
+algorithm. Automatic location accepts a Cloudflare POP only when its country
+matches the client IP country; otherwise it uses a same-country latency landmark
+or an unprefixed stable alias when location is uncertain. Already cached names
+remain unchanged. Maximum resources use all host processors and RAM after the Android
 reserve. Settings can switch to manual limits. Back from the launcher or removal
 from recents requests guest poweroff; OpenRC reports this node down to Nomad before shutting down the overlay,
 while the foreground service retains its wake lock. Home/backgrounding remains
