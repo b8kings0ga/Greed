@@ -2,14 +2,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
-	"github.com/b8kings0ga/Mimir/pkg/nodename"
-	"io"
-	"net/http"
+	"net"
 	"os"
 	"strings"
-	"time"
+
+	"github.com/b8kings0ga/Mimir/pkg/nodelocation"
+	"github.com/b8kings0ga/Mimir/pkg/nodename"
 )
 
 func main() {
@@ -20,31 +21,14 @@ func main() {
 		panic("persistent identity is required")
 	}
 	if *region == "" {
-		client := &http.Client{Timeout: 15 * time.Second}
-		response, err := client.Get("https://cloudflare.com/cdn-cgi/trace")
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+		ctx, cancel := context.WithTimeout(context.Background(), nodelocation.Budget)
+		result := nodelocation.Locate(ctx, &net.Dialer{}, false)
+		cancel()
+		*region = verifiedRegion(result)
+		if *region == "" {
+			fmt.Println(nodename.Fallback(*key))
+			return
 		}
-		defer response.Body.Close()
-		if response.StatusCode != 200 {
-			panic("trace request failed")
-		}
-		body, err := io.ReadAll(io.LimitReader(response.Body, 8192))
-		if err != nil {
-			panic(err)
-		}
-		fields := map[string]string{}
-		for _, line := range strings.Split(string(body), "\n") {
-			k, v, ok := strings.Cut(line, "=")
-			if ok {
-				fields[k] = strings.TrimSpace(v)
-			}
-		}
-		if len(fields["loc"]) != 2 || len(fields["colo"]) != 3 {
-			panic("invalid trace region")
-		}
-		*region = strings.ToLower(fields["loc"] + fields["colo"])
 	}
 	name, err := nodename.GenerateWithRole(*region, *key, nodename.RoleWorker)
 	if err != nil {
@@ -52,4 +36,11 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println(name)
+}
+
+func verifiedRegion(result nodelocation.Result) string {
+	if len(result.Country) != 2 || len(result.LOCODE) != 5 || !strings.EqualFold(result.Country, result.LOCODE[:2]) {
+		return ""
+	}
+	return result.LOCODE
 }
